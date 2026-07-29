@@ -11,5 +11,6 @@ setInterval(function () {
         $('#d-stats-rf').text(d.stats_rf);
         $('#d-stations').html(d.last_stations_rows);
         $('#d-top-send').html(d.top_send_rows);
+        $('#d-bme280').html(d.bme280_rows);
     });
 }, 5000);

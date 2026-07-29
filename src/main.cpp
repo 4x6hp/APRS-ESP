@@ -35,9 +35,7 @@
 #include "aprsMsg.h"
 
 #pragma BME280
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
-Adafruit_BME280 bme;
+#include "bme280.h"
 float bme280temp = 0;
 float bme280hum = 0;
 float bme280press = 0;
@@ -1063,15 +1061,14 @@ void setup()
                             0);             /* Core where the task should run */
 #endif
 
-    bme.begin(0x76);
-    // if (!bme.begin(0x76))
-    // {
-    //     Serial.println(F("Could not find a valid BME280 sensor, check wiring!"));
-    //     while (1)
-    //         ;
-    // }
-
-    // Serial.println(F("BME280 sensor found successfully!"));
+    // bme.begin(0x76);
+    if (!initBME280())
+    {
+        log_e("BME280 not found. Please check wiring.");
+        while (1)
+            ;
+    }
+    log_i("BME280 initialized successfully.");
 }
 
 int pkgCount = 0;
@@ -1181,9 +1178,10 @@ String send_gps_location()
 
 #pragma region BME280
     // 1. Read BME280 sensor data
-    bme280temp = bme.readTemperature();
-    bme280hum = bme.readHumidity();
-    bme280press = bme.readPressure() / 100.0F;
+    BMEData currentReading = readBME280Data();
+    bme280temp = currentReading.temperature;
+    bme280hum = currentReading.humidity;
+    bme280press = currentReading.pressure / 100.0F;
 
     log_d("Temp:"
           " %.2f °C, Humidity: %.2f %%, Pressure: %.2f hPa",
@@ -1238,9 +1236,10 @@ String send_gps_location()
 void BME280Update()
 {
     // 1. Read BME280 sensor data
-    bme280temp = bme.readTemperature();
-    bme280hum = bme.readHumidity();
-    bme280press = bme.readPressure() / 100.0F;
+    BMEData currentReading = readBME280Data();
+    bme280temp = currentReading.temperature;
+    bme280hum = currentReading.humidity;
+    bme280press = currentReading.pressure / 100.0F;
 
     log_d("Temp:"
           " %.2f °C, Humidity: %.2f %%, Pressure: %.2f hPa",
@@ -1396,6 +1395,24 @@ static uint16_t getTelemetryBatteryMv()
     return 0;
 #endif
 }
+
+static uint16_t getTelemetryBatteryPercent()
+{
+#if defined(USE_PMU)
+    return PMU.isBatteryConnect() ? (uint16_t)PMU.getBatteryPercent() : 0;
+#elif defined(ADC_BATTERY)
+    return batteryPercentage;
+#else
+    return 0;
+#endif
+}
+
+// static xpowers_chg_status_t getTelemetryBatteryPercent()
+// {
+// #if defined(USE_PMU)
+//     return PMU.isBatteryConnect() ? PMU.getChargerStatus() : XPOWERS_AXP2101_CHG_TRI_STATE;
+// #endif
+// }
 
 void dbgTick()
 {
@@ -2113,12 +2130,14 @@ void taskAPRS(void *pvParameters)
                 }
                 char rawTlm[100];
                 const uint16_t tlmBatteryMv = getTelemetryBatteryMv();
+                const uint8_t tlmBatteryPct = getTelemetryBatteryPercent();
+
                 if (config.aprs_ssid == 0)
                 {
                     sprintf(rawTlm, "%s>%s:T#%03d,%d,%d,%d,%d,%u,00000000",
                             config.aprs_mycall, APRS_TOCALL, igateTLM.Sequence,
                             igateTLM.RF2INET, igateTLM.INET2RF, igateTLM.RX,
-                            igateTLM.TX, tlmBatteryMv);
+                            tlmBatteryPct, tlmBatteryMv);
                 }
                 else
                 {
@@ -2126,14 +2145,14 @@ void taskAPRS(void *pvParameters)
                         rawTlm, "%s-%d>%s:T#%03d,%d,%d,%d,%d,%u,00000000",
                         config.aprs_mycall, config.aprs_ssid, APRS_TOCALL, igateTLM.Sequence,
                         igateTLM.RF2INET, igateTLM.INET2RF, igateTLM.RX,
-                        igateTLM.TX, tlmBatteryMv);
+                        tlmBatteryPct, tlmBatteryMv);
                 }
 
                 if (callsignValid && aprsClient.connected())
                 {
                     aprsClient.println(String(rawTlm)); // Send packet to Inet
                 }
-                if (callsignValid && config.tnc && config.tnc_digi)
+                if (callsignValid && config.tnc) //&& config.tnc_digi
                 {
                     pkgTxPush(rawTlm, strlen(rawTlm), 0);
                 }
