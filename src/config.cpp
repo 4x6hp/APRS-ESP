@@ -141,9 +141,9 @@ static bool nvsRead(const char *ns) {
     config.aprs            = prefs.getBool  ("aprs",          false);
     config.wifi_client     = prefs.getBool  ("wifi_client",   true);
     config.wifi            = prefs.getBool  ("wifi",          true);
-    config.wifi_mode       = prefs.getUChar ("wifi_mode",     WIFI_AP_FIX);
-    config.gps_lat         = prefs.getFloat ("gps_lat",       54.6842f);
-    config.gps_lon         = prefs.getFloat ("gps_lon",       25.2398f);
+    config.wifi_mode       = prefs.getUChar ("wifi_mode",     WIFI_AP_STA_FIX);
+    config.gps_lat         = prefs.getFloat ("gps_lat",       32.2956f);
+    config.gps_lon         = prefs.getFloat ("gps_lon",       34.8660f);
     config.gps_alt         = prefs.getFloat ("gps_alt",       10.0f);
     config.aprs_ssid       = prefs.getUChar ("aprs_ssid",     15);
     config.aprs_port       = prefs.getUShort("aprs_port",     14580);
@@ -164,9 +164,9 @@ static bool nvsRead(const char *ns) {
     strlcpy(config.aprs_moniCall, prefs.getString("aprs_moniCall", "").c_str(),                 sizeof(config.aprs_moniCall));
     strlcpy(config.aprs_filter,   prefs.getString("aprs_filter",   "m/50").c_str(),             sizeof(config.aprs_filter));
     strlcpy(config.aprs_comment,  prefs.getString("aprs_comment",  "").c_str(),                 sizeof(config.aprs_comment));
-    strlcpy(config.aprs_path,     prefs.getString("aprs_path",     "WIDE1-1").c_str(),          sizeof(config.aprs_path));
-    strlcpy(config.wifi_ssid,     prefs.getString("wifi_ssid",     "APRS-ESP32").c_str(),       sizeof(config.wifi_ssid));
-    strlcpy(config.wifi_pass,     prefs.getString("wifi_pass",     "aprs-esp32").c_str(),       sizeof(config.wifi_pass));
+    strlcpy(config.aprs_path,     prefs.getString("aprs_path",     "WIDE1-1,WIDE2-1").c_str(),          sizeof(config.aprs_path));
+    strlcpy(config.wifi_ssid,     prefs.getString("wifi_ssid",     "4X6HP").c_str(),       sizeof(config.wifi_ssid));
+    strlcpy(config.wifi_pass,     prefs.getString("wifi_pass",     "ce3957264d").c_str(),       sizeof(config.wifi_pass));
     strlcpy(config.wifi_ap_ssid,  prefs.getString("wifi_ap_ssid",  "APRS-ESP32").c_str(),       sizeof(config.wifi_ap_ssid));
     strlcpy(config.wifi_ap_pass,  prefs.getString("wifi_ap_pass",  "aprs-esp32").c_str(),       sizeof(config.wifi_ap_pass));
     strlcpy(config.tnc_path,      prefs.getString("tnc_path",      "WIDE1-1").c_str(),          sizeof(config.tnc_path));
@@ -306,29 +306,29 @@ void SaveConfigBackup() {
 
 void DefaultConfig() {
     log_i("Applying Factory Default configuration!");
-    sprintf(config.aprs_mycall, "MYCALL");
-    config.aprs_ssid = 15;
+    sprintf(config.aprs_mycall, "4X6HP");
+    config.aprs_ssid = 13;
     sprintf(config.aprs_host, "rotate.aprs2.net");
     config.aprs_port = 14580;
     sprintf(config.aprs_passcode, "00000");
     sprintf(config.aprs_moniCall, "%s-%d", config.aprs_mycall, config.aprs_ssid);
     sprintf(config.aprs_filter, "m/50");
-    sprintf(config.wifi_ssid, "APRS-ESP32");
-    sprintf(config.wifi_pass, "aprs-esp32");
+    sprintf(config.wifi_ssid, "4X6HP");
+    sprintf(config.wifi_pass, "ce3957264d");
     sprintf(config.wifi_ap_ssid, "APRS-ESP32");
     sprintf(config.wifi_ap_pass, "aprs-esp32");
     config.wifi_client = true;
     config.synctime = true;
     config.aprs_beacon = 10;
-    config.gps_lat = 54.6842;
-    config.gps_lon = 25.2398;
+    config.gps_lat = 32.2956;
+    config.gps_lon = 34.8660;
     config.gps_alt = 10;
     config.tnc = false;
     config.inet2rf = false;
     config.rf2inet = false;
     config.aprs = false;
     config.wifi = true;
-    config.wifi_mode = WIFI_AP_FIX;
+    config.wifi_mode = WIFI_AP_STA_FIX;
     config.tnc_digi = false;
     config.tnc_telemetry = false;
     config.tnc_btext[0] = 0;
@@ -341,7 +341,7 @@ void DefaultConfig() {
     memset(config.aprs_object, 0, sizeof(config.aprs_object));
     sprintf(config.aprs_comment, "ESP github.com/erstec/APRS-ESP");
     sprintf(config.tnc_comment, "ESP github.com/erstec/APRS-ESP");
-    sprintf(config.tnc_path, "WIDE1-1");
+    sprintf(config.tnc_path, "WIDE1-1,WIDE2-1");
     config.wifi_power = 44;
     config.input_hpf = true;
 #ifndef BAND_70CM
@@ -455,9 +455,9 @@ Configuration jsonToBinConfig(JsonObject obj) {
     tmpConfig.aprs            = obj["aprs"]            | false;
     tmpConfig.wifi_client     = obj["wifi_client"]     | true;
     tmpConfig.wifi            = obj["wifi"]            | true;
-    tmpConfig.wifi_mode       = obj["wifi_mode"]       | (uint8_t)WIFI_AP_FIX;
-    tmpConfig.gps_lat         = obj["gps_lat"]         | 54.6842f;
-    tmpConfig.gps_lon         = obj["gps_lon"]         | 25.2398f;
+    tmpConfig.wifi_mode       = obj["wifi_mode"]       | (uint8_t)WIFI_AP_STA_FIX;
+    tmpConfig.gps_lat         = obj["gps_lat"]         | 32.2956f;
+    tmpConfig.gps_lon         = obj["gps_lon"]         | 34.8660f;
     tmpConfig.gps_alt         = obj["gps_alt"]         | 10.0f;
     tmpConfig.aprs_ssid       = obj["aprs_ssid"]       | (uint8_t)15;
     tmpConfig.aprs_port       = obj["aprs_port"]       | (uint16_t)14580;

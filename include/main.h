@@ -175,8 +175,8 @@ extern bool    lastRxIsIS;
 
 extern bool callsignValid;
 
-const char PARM[] = {"PARM.RF->INET,INET->RF,DigiRpt,TX2RF,DropRx"};
-const char UNIT[] = {"UNIT.Pkts,Pkts,Pkts,Pkts,Pkts"};
+const char PARM[] = {"PARM.RF->INET,INET->RF,DigiRpt,TX2RF,BatV"};
+const char UNIT[] = {"UNIT.Pkts,Pkts,Pkts,Pkts,mV"};
 const char EQNS[] = {"EQNS.0,1,0,0,1,0,0,1,0,0,1,0,0,1,0"};
 
 const float ctcss[] = {0,     67,    71.9,  74.4,  77,    79.7,  82.5,  85.4,

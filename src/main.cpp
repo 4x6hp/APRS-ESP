@@ -31,9 +31,18 @@
 #include <pbuf.h>
 #include <parse_aprs.h>
 #include <WiFiUdp.h>
-
 #include "rfModem.h"
 #include "aprsMsg.h"
+
+#pragma BME280
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
+Adafruit_BME280 bme;
+float bme280temp = 0;
+float bme280hum = 0;
+float bme280press = 0;
+String aprsWxPayloadString;
+#pragma endregion
 
 #ifdef USE_GPS
 #include "TinyGPS++.h"
@@ -78,16 +87,24 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(1, PIXELS_PIN, NEO_GRB + NEO_KHZ800)
 
 #if defined(INVERT_LEDS)
 #if defined(USE_NEOPIXEL)
-#define TX_LED_ON() digitalWrite(TX_LED_PIN, LOW); strip.setPixelColor(0, 255, 0, 0);   // Red
-#define TX_LED_OFF() digitalWrite(TX_LED_PIN, HIGH); strip.setPixelColor(0, 0, 0, 0);   // Off
+#define TX_LED_ON()                \
+    digitalWrite(TX_LED_PIN, LOW); \
+    strip.setPixelColor(0, 255, 0, 0); // Red
+#define TX_LED_OFF()                \
+    digitalWrite(TX_LED_PIN, HIGH); \
+    strip.setPixelColor(0, 0, 0, 0); // Off
 #else
-#define TX_LED_ON() if (TX_LED_PIN > -1) digitalWrite(TX_LED_PIN, LOW);
-#define TX_LED_OFF() if (TX_LED_PIN > -1) digitalWrite(TX_LED_PIN, HIGH);
+#define TX_LED_ON()      \
+    if (TX_LED_PIN > -1) \
+        digitalWrite(TX_LED_PIN, LOW);
+#define TX_LED_OFF()     \
+    if (TX_LED_PIN > -1) \
+        digitalWrite(TX_LED_PIN, HIGH);
 #endif
 #else
 #if defined(USE_NEOPIXEL)
-#define TX_LED_ON() strip.setPixelColor(0, 255, 0, 0);  // Red
-#define TX_LED_OFF() strip.setPixelColor(0, 0, 0, 0);   // Off
+#define TX_LED_ON() strip.setPixelColor(0, 255, 0, 0); // Red
+#define TX_LED_OFF() strip.setPixelColor(0, 0, 0, 0);  // Off
 #else
 #define TX_LED_ON() digitalWrite(TX_LED_PIN, HIGH);
 #define TX_LED_OFF() digitalWrite(TX_LED_PIN, LOW);
@@ -97,8 +114,8 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(1, PIXELS_PIN, NEO_GRB + NEO_KHZ800)
 #else
 
 #if defined(USE_NEOPIXEL)
-#define TX_LED_ON() strip.setPixelColor(0, 255, 0, 0);  // Red
-#define TX_LED_OFF() strip.setPixelColor(0, 0, 0, 0);   // Off
+#define TX_LED_ON() strip.setPixelColor(0, 255, 0, 0); // Red
+#define TX_LED_OFF() strip.setPixelColor(0, 0, 0, 0);  // Off
 #endif
 
 #endif
@@ -107,7 +124,7 @@ HardwareSerial SerialRF(SERIAL_RF_UART);
 
 bool fwUpdateProcess = false;
 volatile bool menuUpdateNeeded = false;
-volatile bool oledTxBusy       = false;
+volatile bool oledTxBusy = false;
 
 bool callsignValid = false;
 
@@ -132,9 +149,9 @@ int mVrms = 0;
 cppQueue PacketBuffer(sizeof(AX25Msg), 10, IMPLEMENTATION);
 
 statusType status;
-char     lastRxCall[16] = "---";
-time_t   lastRxTime     = 0;
-bool     lastRxIsIS     = false;
+char lastRxCall[16] = "---";
+time_t lastRxTime = 0;
+bool lastRxIsIS = false;
 RTC_DATA_ATTR igateTLMType igateTLM;
 
 txQueueType *txQueue;
@@ -170,7 +187,7 @@ ParseAPRS aprsParse;
 
 // Set your Static IP address for wifi AP
 IPAddress local_IP(192, 168, 4, 1);
-IPAddress gateway(192, 168, 4, 1);  // must match local_IP — DHCP uses gateway as DNS server for clients
+IPAddress gateway(192, 168, 4, 1); // must match local_IP — DHCP uses gateway as DNS server for clients
 IPAddress subnet(255, 255, 255, 0);
 
 int pkgTNC_count = 0;
@@ -185,21 +202,27 @@ static unsigned long gpsUpdTMO = 0;
 
 bool AFSKInitAct = false;
 
-int tlmList_Find(char *call) {
+int tlmList_Find(char *call)
+{
     int i;
-    for (i = 0; i < TLMLISTSIZE; i++) {
-        if (strstr(Telemetry[i].callsign, call) != NULL) {
+    for (i = 0; i < TLMLISTSIZE; i++)
+    {
+        if (strstr(Telemetry[i].callsign, call) != NULL)
+        {
             return i;
         }
     }
     return -1;
 }
 
-int tlmListOld() {
+int tlmListOld()
+{
     int i, ret = 0;
     time_t minimum = Telemetry[0].time;
-    for (i = 1; i < TLMLISTSIZE; i++) {
-        if (Telemetry[i].time < minimum) {
+    for (i = 1; i < TLMLISTSIZE; i++)
+    {
+        if (Telemetry[i].time < minimum)
+        {
             minimum = Telemetry[i].time;
             ret = i;
         }
@@ -209,9 +232,11 @@ int tlmListOld() {
     return ret;
 }
 
-TelemetryType getTlmList(int idx) {
+TelemetryType getTlmList(int idx)
+{
     TelemetryType ret;
-    if (xSemaphoreTake(psramMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    if (xSemaphoreTake(psramMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+    {
         log_e("psramMutex timeout in getTlmList");
         memset(&ret, 0, sizeof(ret));
         return ret;
@@ -221,18 +246,23 @@ TelemetryType getTlmList(int idx) {
     return ret;
 }
 
-bool pkgTxSend() {
+bool pkgTxSend()
+{
     if (getReceive())
         return false;
-    if (xSemaphoreTake(psramMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    if (xSemaphoreTake(psramMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+    {
         log_e("psramMutex timeout in pkgTxSend");
         return false;
     }
     char info[500];
-    for (int i = 0; i < PKGTXSIZE; i++) {
-        if (txQueue[i].Active) {
+    for (int i = 0; i < PKGTXSIZE; i++)
+    {
+        if (txQueue[i].Active)
+        {
             int decTime = millis() - txQueue[i].timeStamp;
-            if (decTime > txQueue[i].Delay) {
+            if (decTime > txQueue[i].Delay)
+            {
                 txQueue[i].Active = false;
                 memset(info, 0, sizeof(info));
                 strcpy(info, txQueue[i].Info);
@@ -247,18 +277,21 @@ bool pkgTxSend() {
                 adcActive(false);
 #endif
                 TX_LED_ON();
-                oledTxBusy = true;  // block taskOLEDDisplay from touching I2C during TX
+                oledTxBusy = true; // block taskOLEDDisplay from touching I2C during TX
                 APRS_setPreamble(APRS_PREAMBLE);
                 String _txPkt = String(info);
                 _txPkt.trim();
                 APRS_sendTNC2Pkt(_txPkt); // Send packet to RF
                 log_i("[TX] {\"dir\":\"RF\",\"pkt\":\"%s\"}", _txPkt.c_str());
 
-                for (int i = 0; i < 100; i++) {
+                for (int i = 0; i < 100; i++)
+                {
 #if defined(INVERT_PTT)
-                    if (digitalRead(PTT_PIN) == 1) {
+                    if (digitalRead(PTT_PIN) == 1)
+                    {
 #else
-                    if (digitalRead(PTT_PIN) == 0) {
+                    if (digitalRead(PTT_PIN) == 0)
+                    {
 #endif
                         log_i("[TX] {\"event\":\"ptt_release\"}");
                         break;
@@ -273,24 +306,25 @@ bool pkgTxSend() {
                 adcActive(true);
 #endif
                 oledTxBusy = false;
-                
+
                 return true;
             }
         }
     }
-  
+
     xSemaphoreGive(psramMutex);
 
     return false;
 }
 
-
-bool pkgTxPush(const char *info, size_t len, int dly) {
+bool pkgTxPush(const char *info, size_t len, int dly)
+{
     char *ecs = strstr(info, ">");
     if (ecs == NULL)
         return false;
 
-    if (xSemaphoreTake(psramMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    if (xSemaphoreTake(psramMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+    {
         log_e("psramMutex timeout in pkgTxPush");
         return false;
     }
@@ -312,8 +346,10 @@ bool pkgTxPush(const char *info, size_t len, int dly) {
     // }
 
     // Add
-    for (int i = 0; i < PKGTXSIZE; i++) {
-        if (txQueue[i].Active == false) {
+    for (int i = 0; i < PKGTXSIZE; i++)
+    {
+        if (txQueue[i].Active == false)
+        {
             memset(txQueue[i].Info, 0, sizeof(txQueue[i].Info));
             memcpy(&txQueue[i].Info[0], info, len);
             txQueue[i].Delay = dly;
@@ -328,18 +364,24 @@ bool pkgTxPush(const char *info, size_t len, int dly) {
     return true;
 }
 
-void aprsTimeGet(uint8_t *buf) {
+void aprsTimeGet(uint8_t *buf)
+{
     String msg = String((char *)buf);
     // Try get time from APRS message
-    if (msg.length() < 10) return;
+    if (msg.length() < 10)
+        return;
     int etaPos = msg.indexOf('@');
-    if (etaPos < 0) {
+    if (etaPos < 0)
+    {
         etaPos = msg.indexOf('*');
-        if (etaPos < 0) return;
+        if (etaPos < 0)
+            return;
     }
     int tzpos = etaPos + 7;
-    if (tzpos > msg.length()) return;
-    if (msg[tzpos] != 'z') return;
+    if (tzpos > msg.length())
+        return;
+    if (msg[tzpos] != 'z')
+        return;
     String time = msg.substring(etaPos + 1, etaPos + 7); // ddhhmm
     int day = time.substring(0, 2).toInt();
     int hour = time.substring(2, 4).toInt();
@@ -347,7 +389,8 @@ void aprsTimeGet(uint8_t *buf) {
 
     log_i("APRS Time: %02d %02d:%02d", day, hour, min);
 
-    if (config.synctime && timeSyncFlag == T_SYNC_NONE && WiFi.status() != WL_CONNECTED) {
+    if (config.synctime && timeSyncFlag == T_SYNC_NONE && WiFi.status() != WL_CONNECTED)
+    {
         // set internal rtc time
         struct tm tmstruct;
         getLocalTime(&tmstruct, 0);
@@ -363,7 +406,7 @@ void aprsTimeGet(uint8_t *buf) {
         timeval tv;
         tv.tv_sec = hour * 3600 + min * 60;
         tv.tv_usec = 0;
-        
+
         timezone tz;
         tz.tz_minuteswest = config.timeZone * 60;
         tz.tz_dsttime = 0;
@@ -378,13 +421,16 @@ void aprsTimeGet(uint8_t *buf) {
 
 uint8_t *packetData;
 
-void aprs_msg_callback(struct AX25Msg *msg) {
+void aprs_msg_callback(struct AX25Msg *msg)
+{
     AX25Msg pkg;
     memcpy(&pkg, msg, sizeof(AX25Msg));
     // Prevent multiline messages
     size_t crlf_pos = pkg.len;
-    for (int i = 0; i < pkg.len; i++) {
-        if (pkg.info[i] == '\n' || pkg.info[i] == '\r') {
+    for (int i = 0; i < pkg.len; i++)
+    {
+        if (pkg.info[i] == '\n' || pkg.info[i] == '\r')
+        {
             crlf_pos = i;
             break;
         }
@@ -396,7 +442,7 @@ void aprs_msg_callback(struct AX25Msg *msg) {
     PacketBuffer.push(&pkg);
 
     status.rxCount++;
-    
+
     aprsTimeGet(pkg.info);
 }
 
@@ -404,34 +450,48 @@ uint8_t gwRaw[PKGLISTSIZE][66];
 uint8_t gwRawSize[PKGLISTSIZE];
 int gwRaw_count = 0, gwRaw_idx_rd = 0, gwRaw_idx_rw = 0;
 
-void pushGwRaw(uint8_t *raw, uint8_t size) {
-    if (gwRaw_count > PKGLISTSIZE) return;
-    if (++gwRaw_idx_rw >= PKGLISTSIZE) gwRaw_idx_rw = 0;
-    if (size > 65) size = 65;
+void pushGwRaw(uint8_t *raw, uint8_t size)
+{
+    if (gwRaw_count > PKGLISTSIZE)
+        return;
+    if (++gwRaw_idx_rw >= PKGLISTSIZE)
+        gwRaw_idx_rw = 0;
+    if (size > 65)
+        size = 65;
     memcpy(&gwRaw[gwRaw_idx_rw][0], raw, size);
     gwRawSize[gwRaw_idx_rw] = size;
     gwRaw_count++;
 }
 
-uint8_t popGwRaw(uint8_t *raw) {
+uint8_t popGwRaw(uint8_t *raw)
+{
     uint8_t size = 0;
-    if (gwRaw_count <= 0) return 0;
-    if (++gwRaw_idx_rd >= PKGLISTSIZE) gwRaw_idx_rd = 0;
+    if (gwRaw_count <= 0)
+        return 0;
+    if (++gwRaw_idx_rd >= PKGLISTSIZE)
+        gwRaw_idx_rd = 0;
     size = gwRawSize[gwRaw_idx_rd];
     memcpy(raw, &gwRaw[gwRaw_idx_rd][0], size);
-    if (gwRaw_count > 0) gwRaw_count--;
+    if (gwRaw_count > 0)
+        gwRaw_count--;
     return size;
 }
 
 WiFiClient aprsClient;
 
-static bool aprsCheckMsg(const char *from, const char *info) {
-    if (!info || info[0] != ':' || strlen(info) < 11 || info[10] != ':') return false;
+static bool aprsCheckMsg(const char *from, const char *info)
+{
+    if (!info || info[0] != ':' || strlen(info) < 11 || info[10] != ':')
+        return false;
 
     char dest[10] = {0};
     strncpy(dest, info + 1, 9);
-    for (int i = 8; i >= 0; i--) {
-        if (dest[i] == ' ') dest[i] = '\0'; else break;
+    for (int i = 8; i >= 0; i--)
+    {
+        if (dest[i] == ' ')
+            dest[i] = '\0';
+        else
+            break;
     }
 
     char ourCall[12];
@@ -440,24 +500,31 @@ static bool aprsCheckMsg(const char *from, const char *info) {
     else
         strlcpy(ourCall, config.aprs_mycall, sizeof(ourCall));
 
-    if (strcasecmp(dest, ourCall) != 0) return false;
+    if (strcasecmp(dest, ourCall) != 0)
+        return false;
 
     const char *body = info + 11;
     char msgText[70] = {0};
-    char msgId[6]    = {0};
+    char msgId[6] = {0};
 
     const char *idOpen = strrchr(body, '{');
-    if (idOpen) {
+    if (idOpen)
+    {
         const char *idClose = strchr(idOpen + 1, '}');
         int textLen = (int)(idOpen - body);
-        if (textLen > 69) textLen = 69;
+        if (textLen > 69)
+            textLen = 69;
         strncpy(msgText, body, textLen);
-        if (idClose) {
+        if (idClose)
+        {
             int idLen = (int)(idClose - idOpen - 1);
-            if (idLen > 5) idLen = 5;
+            if (idLen > 5)
+                idLen = 5;
             strncpy(msgId, idOpen + 1, idLen);
         }
-    } else {
+    }
+    else
+    {
         strlcpy(msgText, body, sizeof(msgText));
     }
 
@@ -465,22 +532,25 @@ static bool aprsCheckMsg(const char *from, const char *info) {
     log_i("[MSG] {\"event\":\"rx\",\"from\":\"%s\",\"text\":\"%s\"}", from, msgText);
 
     char fromBuf[12], textBuf[70];
-    strlcpy(fromBuf, from,    sizeof(fromBuf));
+    strlcpy(fromBuf, from, sizeof(fromBuf));
     strlcpy(textBuf, msgText, sizeof(textBuf));
     if (config.aprs_sms_popup > 0)
         OledEnqueueMsg("MSG FROM", fromBuf, textBuf, config.aprs_sms_popup);
 
-    if (msgId[0]) {
+    if (msgId[0])
+    {
         char ackInfo[25];
         snprintf(ackInfo, sizeof(ackInfo), ":%-9s:ack%s", from, msgId);
 
-        if (aprsClient.connected()) {
+        if (aprsClient.connected())
+        {
             String ackPkt = String(ourCall) + ">APRS:" + String(ackInfo);
             aprsClient.println(ackPkt);
             log_i("[MSG] {\"event\":\"ack_is\",\"pkt\":\"%s\"}", ackPkt.c_str());
         }
 
-        if (callsignValid && config.tnc) {
+        if (callsignValid && config.tnc)
+        {
             char rfAck[100];
             if (config.aprs_ssid > 0 && config.aprs_path[0] != 0)
                 snprintf(rfAck, sizeof(rfAck), "%s-%d>%s,%s:%s", config.aprs_mycall, config.aprs_ssid, APRS_TOCALL, config.aprs_path, ackInfo);
@@ -497,25 +567,35 @@ static bool aprsCheckMsg(const char *from, const char *info) {
     return true;
 }
 
-boolean APRSConnect() {
+boolean APRSConnect()
+{
     log_i("[APRS] {\"event\":\"connecting\"}");
     String login = "";
     uint8_t con = aprsClient.connected();
-    if (con <= 0) {
-        if (!callsignValid) return false;
+    if (con <= 0)
+    {
+        if (!callsignValid)
+            return false;
 
-        if (!aprsClient.connect(config.aprs_host, config.aprs_port)) {
+        if (!aprsClient.connect(config.aprs_host, config.aprs_port))
+        {
             log_w("[APRS] {\"event\":\"connect_failed\"}");
             return false;
         }
 
-        if (strlen(config.aprs_object) >= 3) {
+        if (strlen(config.aprs_object) >= 3)
+        {
             uint16_t passcode = aprsParse.passCode(config.aprs_object);
             login = "user " + String(config.aprs_object) + " pass " + String(passcode, DEC) + " vers APRS-ESP V" + String(VERSION_FULL) + " filter " + String(config.aprs_filter);
-        } else {
-            if (config.aprs_ssid == 0) {
+        }
+        else
+        {
+            if (config.aprs_ssid == 0)
+            {
                 login = "user " + String(config.aprs_mycall) + " pass " + String(config.aprs_passcode) + " vers APRS-ESP V" + String(VERSION_FULL) + " filter " + String(config.aprs_filter);
-            } else {
+            }
+            else
+            {
                 login = "user " + String(config.aprs_mycall) + "-" + String(config.aprs_ssid) + " pass " + String(config.aprs_passcode) + " vers APRS-ESP V" + String(VERSION_FULL) + " filter " + String(config.aprs_filter);
             }
         }
@@ -540,8 +620,10 @@ void setFlag(void)
 void setupPower()
 {
     bool result = PMU.begin(Wire, AXP2101_SLAVE_ADDRESS, OLED_SDA_PIN, OLED_SCL_PIN);
-    if (result == false) {
-        while (1) {
+    if (result == false)
+    {
+        while (1)
+        {
             log_e("PMU is not online...");
             delay(500);
         }
@@ -558,14 +640,12 @@ void setupPower()
     // higher than this value will turn off the PMU
     PMU.setVbusCurrentLimit(XPOWERS_AXP2101_VBUS_CUR_LIM_2000MA);
 
-
     // Get the VSYS shutdown voltage
     uint16_t vol = PMU.getSysPowerDownVoltage();
     log_i("->  getSysPowerDownVoltage:%u", vol);
 
     // 3000mV protects cell from deep discharge; 2600 is absolute spec minimum
     PMU.setSysPowerDownVoltage(3000);
-
 
     //! DC1 ESP32S3 Core VDD and OLED_VBAT , Don't change
     // PMU.setDC1Voltage(3400);        // +100mV // ESP32S3 can handle up to 3.6V, SH1106 up to 3.5V
@@ -584,27 +664,25 @@ void setupPower()
     //! BLDO1 MIC VDD, Don't change
     PMU.setBLDO1Voltage(3300);
 
-
     //! The following supply voltages can be controlled by the user
     // DC5 IMAX=2A
     // 1200mV
     // 1400~3700mV,100mV/step,24steps
     PMU.setDC5Voltage(3300);
 
-    //ALDO1 IMAX=300mA
-    //500~3500mV, 100mV/step,31steps
+    // ALDO1 IMAX=300mA
+    // 500~3500mV, 100mV/step,31steps
     PMU.setALDO1Voltage(3300);
 
-    //ALDO3 IMAX=300mA
-    //500~3500mV, 100mV/step,31steps
+    // ALDO3 IMAX=300mA
+    // 500~3500mV, 100mV/step,31steps
     PMU.setALDO3Voltage(3300);
 
-    //BLDO2 IMAX=300mA
-    //500~3500mV, 100mV/step,31steps
+    // BLDO2 IMAX=300mA
+    // 500~3500mV, 100mV/step,31steps
     PMU.setBLDO2Voltage(3300);
 
     //! END
-
 
     // Turn on the power that needs to be used
     //! DC1 ESP32S3 Core VDD , Don't change
@@ -636,33 +714,38 @@ void setupPower()
     PMU.disableDLDO2();
 
     log_d("DCDC=======================================================================");
-    log_d("DC1  : %s   Voltage:%u mV",  PMU.isEnableDC1()  ? "+" : "-", PMU.getDC1Voltage());
-    log_d("DC2  : %s   Voltage:%u mV",  PMU.isEnableDC2()  ? "+" : "-", PMU.getDC2Voltage());
-    log_d("DC3  : %s   Voltage:%u mV",  PMU.isEnableDC3()  ? "+" : "-", PMU.getDC3Voltage());
-    log_d("DC4  : %s   Voltage:%u mV",  PMU.isEnableDC4()  ? "+" : "-", PMU.getDC4Voltage());
-    log_d("DC5  : %s   Voltage:%u mV",  PMU.isEnableDC5()  ? "+" : "-", PMU.getDC5Voltage());
+    log_d("DC1  : %s   Voltage:%u mV", PMU.isEnableDC1() ? "+" : "-", PMU.getDC1Voltage());
+    log_d("DC2  : %s   Voltage:%u mV", PMU.isEnableDC2() ? "+" : "-", PMU.getDC2Voltage());
+    log_d("DC3  : %s   Voltage:%u mV", PMU.isEnableDC3() ? "+" : "-", PMU.getDC3Voltage());
+    log_d("DC4  : %s   Voltage:%u mV", PMU.isEnableDC4() ? "+" : "-", PMU.getDC4Voltage());
+    log_d("DC5  : %s   Voltage:%u mV", PMU.isEnableDC5() ? "+" : "-", PMU.getDC5Voltage());
     log_d("ALDO=======================================================================");
-    log_d("ALDO1: %s   Voltage:%u mV",  PMU.isEnableALDO1()  ? "+" : "-", PMU.getALDO1Voltage());
-    log_d("ALDO2: %s   Voltage:%u mV",  PMU.isEnableALDO2()  ? "+" : "-", PMU.getALDO2Voltage());
-    log_d("ALDO3: %s   Voltage:%u mV",  PMU.isEnableALDO3()  ? "+" : "-", PMU.getALDO3Voltage());
-    log_d("ALDO4: %s   Voltage:%u mV",  PMU.isEnableALDO4()  ? "+" : "-", PMU.getALDO4Voltage());
+    log_d("ALDO1: %s   Voltage:%u mV", PMU.isEnableALDO1() ? "+" : "-", PMU.getALDO1Voltage());
+    log_d("ALDO2: %s   Voltage:%u mV", PMU.isEnableALDO2() ? "+" : "-", PMU.getALDO2Voltage());
+    log_d("ALDO3: %s   Voltage:%u mV", PMU.isEnableALDO3() ? "+" : "-", PMU.getALDO3Voltage());
+    log_d("ALDO4: %s   Voltage:%u mV", PMU.isEnableALDO4() ? "+" : "-", PMU.getALDO4Voltage());
     log_d("BLDO=======================================================================");
-    log_d("BLDO1: %s   Voltage:%u mV",  PMU.isEnableBLDO1()  ? "+" : "-", PMU.getBLDO1Voltage());
-    log_d("BLDO2: %s   Voltage:%u mV",  PMU.isEnableBLDO2()  ? "+" : "-", PMU.getBLDO2Voltage());
+    log_d("BLDO1: %s   Voltage:%u mV", PMU.isEnableBLDO1() ? "+" : "-", PMU.getBLDO1Voltage());
+    log_d("BLDO2: %s   Voltage:%u mV", PMU.isEnableBLDO2() ? "+" : "-", PMU.getBLDO2Voltage());
     log_d("===========================================================================");
 
     // Set the time of pressing the button to turn off
     PMU.setPowerKeyPressOffTime(XPOWERS_POWEROFF_4S);
     uint8_t opt = PMU.getPowerKeyPressOffTime();
     String _str = "";
-    switch (opt) {
-    case XPOWERS_POWEROFF_4S: _str = "4 Second";
+    switch (opt)
+    {
+    case XPOWERS_POWEROFF_4S:
+        _str = "4 Second";
         break;
-    case XPOWERS_POWEROFF_6S: _str = "6 Second";
+    case XPOWERS_POWEROFF_6S:
+        _str = "6 Second";
         break;
-    case XPOWERS_POWEROFF_8S: _str = "8 Second";
+    case XPOWERS_POWEROFF_8S:
+        _str = "8 Second";
         break;
-    case XPOWERS_POWEROFF_10S: _str = "10 Second";
+    case XPOWERS_POWEROFF_10S:
+        _str = "10 Second";
         break;
     default:
         break;
@@ -671,14 +754,19 @@ void setupPower()
     // Set the button power-on press time
     PMU.setPowerKeyPressOnTime(XPOWERS_POWERON_128MS);
     opt = PMU.getPowerKeyPressOnTime();
-    switch (opt) {
-    case XPOWERS_POWERON_128MS: _str = "128 Ms";
+    switch (opt)
+    {
+    case XPOWERS_POWERON_128MS:
+        _str = "128 Ms";
         break;
-    case XPOWERS_POWERON_512MS: _str = "512 Ms";
+    case XPOWERS_POWERON_512MS:
+        _str = "512 Ms";
         break;
-    case XPOWERS_POWERON_1S: _str = "1 Second";
+    case XPOWERS_POWERON_1S:
+        _str = "1 Second";
         break;
-    case XPOWERS_POWERON_2S: _str = "2 Second";
+    case XPOWERS_POWERON_2S:
+        _str = "2 Second";
         break;
     default:
         break;
@@ -690,15 +778,13 @@ void setupPower()
     // without the battery temperature detection function, otherwise it will cause abnormal charging
     PMU.disableTSPinMeasure();
 
-
     // Enable internal ADC detection
     PMU.enableBattDetection();
     PMU.enableVbusVoltageMeasure();
     PMU.enableBattVoltageMeasure();
     PMU.enableSystemVoltageMeasure();
-    PMU.enableTemperatureMeasure();  // required — without this getTemperature() returns stale power-on default (~38.4°C)
-    PMU.enableGauge();               // enable Coulomb counter for load-compensated SoC%
-
+    PMU.enableTemperatureMeasure(); // required — without this getTemperature() returns stale power-on default (~38.4°C)
+    PMU.enableGauge();              // enable Coulomb counter for load-compensated SoC%
 
     /*
       The default setting is CHGLED is automatically controlled by the PMU.
@@ -720,15 +806,15 @@ void setupPower()
     PMU.clearIrqStatus();
     // Enable the required interrupt function
     PMU.enableIRQ(
-        XPOWERS_AXP2101_BAT_INSERT_IRQ    | XPOWERS_AXP2101_BAT_REMOVE_IRQ      |   // battery hot-swap
-        XPOWERS_AXP2101_VBUS_INSERT_IRQ   | XPOWERS_AXP2101_VBUS_REMOVE_IRQ     |   // USB connect/disconnect
-        XPOWERS_AXP2101_PKEY_SHORT_IRQ    | XPOWERS_AXP2101_PKEY_LONG_IRQ       |   // power key
-        XPOWERS_AXP2101_BAT_CHG_DONE_IRQ  | XPOWERS_AXP2101_BAT_CHG_START_IRQ   |   // charge phase transitions
-        XPOWERS_AXP2101_CHAGER_TIMER_IRQ                                         |   // safety timer expiry (silent failure otherwise)
-        XPOWERS_AXP2101_DIE_OVER_TEMP_IRQ                                        |   // PMU chip overtemperature
-        XPOWERS_AXP2101_BAT_OVER_VOL_IRQ                                         |   // battery overvoltage (safety)
-        XPOWERS_AXP2101_BAT_CHG_OVER_TEMP_IRQ                                    |   // charger over-temp (future-proof; inert with TS disabled)
-        XPOWERS_AXP2101_WARNING_LEVEL1_IRQ | XPOWERS_AXP2101_WARNING_LEVEL2_IRQ      // hardware low-battery thresholds
+        XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ |       // battery hot-swap
+        XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ |     // USB connect/disconnect
+        XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_PKEY_LONG_IRQ |        // power key
+        XPOWERS_AXP2101_BAT_CHG_DONE_IRQ | XPOWERS_AXP2101_BAT_CHG_START_IRQ |  // charge phase transitions
+        XPOWERS_AXP2101_CHAGER_TIMER_IRQ |                                      // safety timer expiry (silent failure otherwise)
+        XPOWERS_AXP2101_DIE_OVER_TEMP_IRQ |                                     // PMU chip overtemperature
+        XPOWERS_AXP2101_BAT_OVER_VOL_IRQ |                                      // battery overvoltage (safety)
+        XPOWERS_AXP2101_BAT_CHG_OVER_TEMP_IRQ |                                 // charger over-temp (future-proof; inert with TS disabled)
+        XPOWERS_AXP2101_WARNING_LEVEL1_IRQ | XPOWERS_AXP2101_WARNING_LEVEL2_IRQ // hardware low-battery thresholds
     );
 
     // Set the precharge charging current
@@ -754,28 +840,24 @@ void setupPower()
     // Arm the hardware die temperature comparator (required for DIE_OVER_TEMP_IRQ to fire)
     PMU.enableDieOverTempDetect();
     // Hardware low-battery thresholds (fuel gauge must be enabled): 15% warn, 5% critical
-    PMU.setLowBatWarnThreshold(2);      // 2 = 15%
-    PMU.setLowBatShutdownThreshold(0);  // 0 = 5%
+    PMU.setLowBatWarnThreshold(2);     // 2 = 15%
+    PMU.setLowBatShutdownThreshold(0); // 0 = 5%
 
     // Disable the PMU long press shutdown function (handled in firmware via PKEY_LONG_IRQ)
     PMU.disableLongPressShutdown();
 
-
     // Get charging target current
     const uint16_t currTable[] = {
-        0, 0, 0, 0, 100, 125, 150, 175, 200, 300, 400, 500, 600, 700, 800, 900, 1000
-    };
+        0, 0, 0, 0, 100, 125, 150, 175, 200, 300, 400, 500, 600, 700, 800, 900, 1000};
     uint8_t val = PMU.getChargerConstantCurr();
     log_d("Val = %u", val);
     log_d("Setting Charge Target Current : %u", currTable[val]);
 
     // Get charging target voltage
     const uint16_t tableVoltage[] = {
-        0, 4000, 4100, 4200, 4350, 4400, 255
-    };
+        0, 4000, 4100, 4200, 4350, 4400, 255};
     val = PMU.getChargeTargetVoltage();
     log_d("Setting Charge Target Voltage : %u", tableVoltage[val]);
-
 }
 #endif
 
@@ -804,26 +886,25 @@ void setup()
 
     psramMutex = xSemaphoreCreateMutex();
 
-    pinMode(BOOT_PIN, INPUT_PULLUP);  // BOOT Button
+    pinMode(BOOT_PIN, INPUT_PULLUP); // BOOT Button
 
 #if defined(USER_BUTTON)
-    pinMode(USER_BUTTON, INPUT_PULLUP);  // USER Button
+    pinMode(USER_BUTTON, INPUT_PULLUP); // USER Button
 #endif
 
     // Set up serial port
     Serial.setRxBufferSize(256);
-    Serial.begin(SERIAL_DEBUG_BAUD);  // debug
+    Serial.begin(SERIAL_DEBUG_BAUD); // debug
 
 #if defined(USE_GPS)
     SerialGPS.setRxBufferSize(1024);
     SerialGPS.begin(SERIAL_GPS_BAUD, SERIAL_8N1, SERIAL_GPS_RXPIN, SERIAL_GPS_TXPIN);
 #endif
 
-
 #ifdef USE_ROTARY
     rotary.begin();
     attachInterrupt(digitalPinToInterrupt(PIN_ROT_CLK), rotaryISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(PIN_ROT_DT),  rotaryISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(PIN_ROT_DT), rotaryISR, CHANGE);
 #else
     pinMode(PIN_ROT_BTN, INPUT_PULLUP);
 #endif
@@ -831,7 +912,8 @@ void setup()
     TX_LED_OFF();
     RX_LED_OFF();
 
-    if (!LittleFS.begin(false)) {
+    if (!LittleFS.begin(false))
+    {
         log_e("LittleFS mount failed — reflash filesystem image");
     }
 
@@ -842,7 +924,6 @@ void setup()
 #if defined(USE_SCREEN) || defined(USE_PMU)
     Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN, 400000L);
 #endif
-
 
 #if defined(BOARD_TTWR_V1)
     // +4.2V EN
@@ -870,13 +951,13 @@ void setup()
 #if defined(BOARD_TTWR_PLUS)
     // MIC Select
     pinMode(MIC_CH_SEL, OUTPUT);
-    digitalWrite(MIC_CH_SEL, HIGH);  // LOW - MIC / HIGH - ESP32
+    digitalWrite(MIC_CH_SEL, HIGH); // LOW - MIC / HIGH - ESP32
 
     // NeoPixel
     strip.setBrightness(100);
     strip.begin();
 
-    strip.setPixelColor(0, 0, 0, 255);  // Blue
+    strip.setPixelColor(0, 0, 0, 255); // Blue
     strip.show();
 #endif
 
@@ -886,10 +967,13 @@ void setup()
     OledPostStartup("Loading config... OK");
 
     // RF SHOULD BE Initialized or there is no reason to startup at all
-    while (!RF_Init(true, true)) {};
+    while (!RF_Init(true, true))
+    {
+    };
 
 #if defined(USE_PMU)
-    if (PMU.isVbusIn()) {
+    if (PMU.isVbusIn())
+    {
         vbusIn = true;
         log_i("Vbus In");
         // PMU.setChargingLedMode(XPOWERS_CHG_LED_CTRL_CHG);
@@ -897,9 +981,10 @@ void setup()
 #endif
 
     // if SmartBeaconing - delay processing GPS data
-    if (config.aprs_beacon == 0) {
+    if (config.aprs_beacon == 0)
+    {
         log_i("SmartBeaconing, delayed GPS processing");
-        gpsUpdTMO = 30000;  // 30 sec
+        gpsUpdTMO = 30000; // 30 sec
     }
 
     // enableLoopWDT();
@@ -909,15 +994,17 @@ void setup()
 
 #if defined(BOARD_TTWR_PLUS) && defined(USE_GPS)
     {
-        auto gpsSendCmd = [](const char *cmd) {
+        auto gpsSendCmd = [](const char *cmd)
+        {
             uint8_t cs = 0;
-            for (const char *p = cmd; *p; p++) cs ^= (uint8_t)*p;
+            for (const char *p = cmd; *p; p++)
+                cs ^= (uint8_t)*p;
             SerialGPS.printf("$%s*%02X\r\n", cmd, cs);
             log_i("GNSS TX: $%s*%02X", cmd, cs);
         };
-        gpsSendCmd("PCAS04,7");                                // Constellation: GPS+BeiDou+GLONASS (default GPS+BeiDou only)
-        gpsSendCmd("PCAS03,1,0,1,0,1,0,0,0,0,0,,,0,0");       // NMEA output: GGA+GSA+RMC, disable GLL/GSV/VTG/ZDA/ANT
-        gpsSendCmd("PCAS02,1000");                             // Fix rate: 1 Hz
+        gpsSendCmd("PCAS04,7");                         // Constellation: GPS+BeiDou+GLONASS (default GPS+BeiDou only)
+        gpsSendCmd("PCAS03,1,0,1,0,1,0,0,0,0,0,,,0,0"); // NMEA output: GGA+GSA+RMC, disable GLL/GSV/VTG/ZDA/ANT
+        gpsSendCmd("PCAS02,1000");                      // Fix rate: 1 Hz
     }
 #endif
 
@@ -927,12 +1014,12 @@ void setup()
                             16384,      /* Stack size in words */
                             NULL,       /* Task input parameter */
 #if defined(BOARD_ESP32DR)
-                            1,          /* Priority of the task */
+                            1, /* Priority of the task */
 #else
-                            3,          /* Priority of the task */
+                            3, /* Priority of the task */
 #endif
                             &taskAPRSHandle, /* Task handle. */
-                            0); /* Core where the task should run */
+                            0);              /* Core where the task should run */
 
     // Task 2
     xTaskCreatePinnedToCore(taskNetwork,   /* Function to implement the task */
@@ -940,12 +1027,12 @@ void setup()
                             (32768),       /* Stack size in words */
                             NULL,          /* Task input parameter */
 #if defined(BOARD_ESP32DR)
-                            1,             /* Priority of the task */
+                            1, /* Priority of the task */
 #else
-                            2,             /* Priority of the task */
+                            2, /* Priority of the task */
 #endif
                             &taskNetworkHandle, /* Task handle. */
-                            1); /* Core where the task should run */
+                            1);                 /* Core where the task should run */
 
     // Task 3
     xTaskCreatePinnedToCore(taskOLEDDisplay,        /* Function to implement the task */
@@ -955,67 +1042,90 @@ void setup()
                             1,                      /* Priority of the task */
                             &taskOLEDDisplayHandle, /* Task handle. */
                             1);                     /* Core where the task should run */
-    
+
     // Task 4
-    xTaskCreatePinnedToCore(taskGPS,                /* Function to implement the task */
-                            "taskGPS",              /* Name of the task */
-                            4096,                   /* Stack size in words */
-                            NULL,                   /* Task input parameter */
-                            2,                      /* Priority of the task */
-                            &taskGPSHandle,         /* Task handle. */
-                            0);                     /* Core where the task should run */
-    
+    xTaskCreatePinnedToCore(taskGPS,        /* Function to implement the task */
+                            "taskGPS",      /* Name of the task */
+                            4096,           /* Stack size in words */
+                            NULL,           /* Task input parameter */
+                            2,              /* Priority of the task */
+                            &taskGPSHandle, /* Task handle. */
+                            0);             /* Core where the task should run */
+
 #if !defined(BOARD_ESP32DR)
     // Task 5
-    xTaskCreatePinnedToCore(taskTNC,                /* Function to implement the task */
-                            "taskTNC",              /* Name of the task */
-                            16384,                  /* Stack size in words */
-                            NULL,                   /* Task input parameter */
-                            1,                      /* Priority of the task */
-                            &taskTNCHandle,         /* Task handle. */
-                            0);                     /* Core where the task should run */
+    xTaskCreatePinnedToCore(taskTNC,        /* Function to implement the task */
+                            "taskTNC",      /* Name of the task */
+                            16384,          /* Stack size in words */
+                            NULL,           /* Task input parameter */
+                            1,              /* Priority of the task */
+                            &taskTNCHandle, /* Task handle. */
+                            0);             /* Core where the task should run */
 #endif
+
+    bme.begin(0x76);
+    // if (!bme.begin(0x76))
+    // {
+    //     Serial.println(F("Could not find a valid BME280 sensor, check wiring!"));
+    //     while (1)
+    //         ;
+    // }
+
+    // Serial.println(F("BME280 sensor found successfully!"));
 }
 
 int pkgCount = 0;
 
-String send_gps_location() {
+String send_gps_location()
+{
     String tnc2Raw = "";
-    
+
     float _lat = 0.0;
     float _lon = 0.0;
 
-    if (config.gps_mode == GPS_MODE_AUTO) {
+    if (config.gps_mode == GPS_MODE_AUTO)
+    {
         log_i("GPS Mode: Auto");
-        //if (/*age != (uint32_t)ULONG_MAX &&*/ gps.location.isValid() /*|| gotGpsFix*/) {
-        if (gps.location.isValid()) {
+        // if (/*age != (uint32_t)ULONG_MAX &&*/ gps.location.isValid() /*|| gotGpsFix*/) {
+        if (gps.location.isValid())
+        {
             _lat = lat / 1000000.0;
             _lon = lon / 1000000.0;
-            distance = 0;   // Reset counted distance
+            distance = 0; // Reset counted distance
             log_i("GPS Fix, using current location");
-        } else {
+        }
+        else
+        {
             _lat = config.gps_lat;
             _lon = config.gps_lon;
             log_i("No GPS Fix, using fixed location");
         }
-    } else if (config.gps_mode == GPS_MODE_FIXED) {
+    }
+    else if (config.gps_mode == GPS_MODE_FIXED)
+    {
         log_i("GPS Mode: Fixed Only");
         _lat = config.gps_lat;
         _lon = config.gps_lon;
-    } else if (config.gps_mode == GPS_MODE_GPS) {
+    }
+    else if (config.gps_mode == GPS_MODE_GPS)
+    {
         log_i("GPS Mode: GPS Only");
-        if (gps.location.isValid()) {
+        if (gps.location.isValid())
+        {
             _lat = lat / 1000000.0;
             _lon = lon / 1000000.0;
-            distance = 0;   // Reset counted distance
+            distance = 0; // Reset counted distance
             log_i("GPS Fix, using current location");
-        } else {
+        }
+        else
+        {
             log_i("No GPS Fix, skipped");
             return "";
         }
     }
 
-    if (_lat == 0.0f && _lon == 0.0f) {
+    if (_lat == 0.0f && _lon == 0.0f)
+    {
         log_w("Zero coordinates, skipping TX");
         return "";
     }
@@ -1030,22 +1140,27 @@ String send_gps_location() {
     DD_DDDDDtoDDMMSS(_lat, &lat_dd, &lat_mm, &lat_ss);
     DD_DDDDDtoDDMMSS(_lon, &lon_dd, &lon_mm, &lon_ss);
 
-    if (_lat < 0) {
+    if (_lat < 0)
+    {
         lat_ns = 'S';
     }
-    if (_lon < 0) {
+    if (_lon < 0)
+    {
         lon_ew = 'W';
     }
 
-    // sprintf(loc, "=%02d%02d.%02dN%c%03d%02d.%02dE%c", 
+    // sprintf(loc, "=%02d%02d.%02dN%c%03d%02d.%02dE%c",
     //         lat_dd, lat_mm, lat_ss, config.aprs_table, lon_dd, lon_mm, lon_ss, config.aprs_symbol);
-    
-    if (strlen(config.aprs_object) >= 3) {
+
+    if (strlen(config.aprs_object) >= 3)
+    {
         sprintf(loc, ")%s!%02d%02d.%02d%c%c%03d%02d.%02d%c%c",
-            config.aprs_object, lat_dd, lat_mm, lat_ss, lat_ns, config.aprs_table, lon_dd, lon_mm, lon_ss, lon_ew, config.aprs_symbol);
-    } else {
+                config.aprs_object, lat_dd, lat_mm, lat_ss, lat_ns, config.aprs_table, lon_dd, lon_mm, lon_ss, lon_ew, config.aprs_symbol);
+    }
+    else
+    {
         sprintf(loc, "!%02d%02d.%02d%c%c%03d%02d.%02d%c%c",
-            lat_dd, lat_mm, lat_ss, lat_ns, config.aprs_table, lon_dd, lon_mm, lon_ss, lon_ew, config.aprs_symbol);
+                lat_dd, lat_mm, lat_ss, lat_ns, config.aprs_table, lon_dd, lon_mm, lon_ss, lon_ew, config.aprs_symbol);
     }
 
     if (config.aprs_ssid == 0)
@@ -1055,24 +1170,129 @@ String send_gps_location() {
 
     tnc2Raw = String(strtmp);
 
-    if (config.aprs_path[0] != 0) {
+    if (config.aprs_path[0] != 0)
+    {
         tnc2Raw += ",";
         tnc2Raw += String(config.aprs_path);
     }
 
     tnc2Raw += ":";
     tnc2Raw += String(loc);
+
+#pragma region BME280
+    // 1. Read BME280 sensor data
+    bme280temp = bme.readTemperature();
+    bme280hum = bme.readHumidity();
+    bme280press = bme.readPressure() / 100.0F;
+
+    log_d("Temp:"
+          " %.2f °C, Humidity: %.2f %%, Pressure: %.2f hPa",
+          bme280temp, bme280hum, bme280press);
+
+    // 2. Convert units for APRS
+    // Convert Celsius to Fahrenheit
+    float tempF = (bme280temp * 9.0 / 5.0) + 32.0;
+    int aprsTemp = round(tempF);
+
+    // Constraints for 3-digit temperature padding (-99 to 999)
+    if (aprsTemp > 999)
+        aprsTemp = 999;
+    if (aprsTemp < -99)
+        aprsTemp = -99;
+
+    // Humidity constraints (00-99, where 00 means 100%)
+    int aprsHum = round(bme280hum);
+    if (aprsHum >= 100)
+        aprsHum = 0;
+    if (aprsHum < 0)
+        aprsHum = 0;
+
+    // Barometric pressure in tenths of hPa
+    int aprsPress = round(bme280press * 10.0);
+    if (aprsPress > 99999)
+        aprsPress = 99999;
+
+    // 3. Concatenate the APRS Weather Payload
+    // Buffer size needs to hold the entire string plus a null terminator
+    // "_.../...g...r...p..." represents placeholders for omitted wind/rain sensors
+    //_.../...g...t075r...p...P...h40b10084
+    char aprsWxPayload[64];
+
+    snprintf(aprsWxPayload, sizeof(aprsWxPayload),
+             ".../...g...t%03dr...p...P...h%02db%05d",
+             aprsTemp, aprsHum, aprsPress);
+
+    aprsWxPayloadString = String(aprsWxPayload);
+
+    // 4. Output the result
+    log_d("APRS WX Payload: %s", aprsWxPayloadString.c_str());
+
+    tnc2Raw += aprsWxPayloadString;
+#pragma endregion
+
     tnc2Raw += String(config.aprs_comment);
 
     return tnc2Raw;
 }
 
-int packet2Raw(String &tnc2, AX25Msg &Packet) {
-    if (Packet.len < 5) return 0;
+void BME280Update()
+{
+    // 1. Read BME280 sensor data
+    bme280temp = bme.readTemperature();
+    bme280hum = bme.readHumidity();
+    bme280press = bme.readPressure() / 100.0F;
+
+    log_d("Temp:"
+          " %.2f °C, Humidity: %.2f %%, Pressure: %.2f hPa",
+          bme280temp, bme280hum, bme280press);
+
+    // 2. Convert units for APRS
+    // Convert Celsius to Fahrenheit
+    float tempF = (bme280temp * 9.0 / 5.0) + 32.0;
+    int aprsTemp = round(tempF);
+
+    // Constraints for 3-digit temperature padding (-99 to 999)
+    if (aprsTemp > 999)
+        aprsTemp = 999;
+    if (aprsTemp < -99)
+        aprsTemp = -99;
+
+    // Humidity constraints (00-99, where 00 means 100%)
+    int aprsHum = round(bme280hum);
+    if (aprsHum >= 100)
+        aprsHum = 0;
+    if (aprsHum < 0)
+        aprsHum = 0;
+
+    // Barometric pressure in tenths of hPa
+    int aprsPress = round(bme280press * 10.0);
+    if (aprsPress > 99999)
+        aprsPress = 99999;
+
+    // 3. Concatenate the APRS Weather Payload
+    // Buffer size needs to hold the entire string plus a null terminator
+    // "_.../...g...r...p..." represents placeholders for omitted wind/rain sensors
+    char aprsWxPayload[64];
+
+    snprintf(aprsWxPayload, sizeof(aprsWxPayload),
+             "_.../...g...r...p...t%03dh%02db%05d",
+             aprsTemp, aprsHum, aprsPress);
+
+    aprsWxPayloadString = String(aprsWxPayload);
+
+    // 4. Output the result
+    log_d("APRS WX Payload: %s", aprsWxPayloadString.c_str());
+}
+
+int packet2Raw(String &tnc2, AX25Msg &Packet)
+{
+    if (Packet.len < 5)
+        return 0;
 
     tnc2 = String(Packet.src.call);
 
-    if (Packet.src.ssid > 0) {
+    if (Packet.src.ssid > 0)
+    {
         tnc2 += String(F("-"));
         tnc2 += String(Packet.src.ssid);
     }
@@ -1080,19 +1300,23 @@ int packet2Raw(String &tnc2, AX25Msg &Packet) {
     tnc2 += String(F(">"));
     tnc2 += String(Packet.dst.call);
 
-    if (Packet.dst.ssid > 0) {
+    if (Packet.dst.ssid > 0)
+    {
         tnc2 += String(F("-"));
         tnc2 += String(Packet.dst.ssid);
     }
 
-    for (int i = 0; i < Packet.rpt_count; i++) {
+    for (int i = 0; i < Packet.rpt_count; i++)
+    {
         tnc2 += String(",");
         tnc2 += String(Packet.rpt_list[i].call);
-        if (Packet.rpt_list[i].ssid > 0) {
+        if (Packet.rpt_list[i].ssid > 0)
+        {
             tnc2 += String("-");
             tnc2 += String(Packet.rpt_list[i].ssid);
         }
-        if (Packet.rpt_flags & (1 << i)) tnc2 += "*";
+        if (Packet.rpt_flags & (1 << i))
+            tnc2 += "*";
     }
 
     tnc2 += String(F(":"));
@@ -1103,24 +1327,25 @@ int packet2Raw(String &tnc2, AX25Msg &Packet) {
 }
 
 #if defined(USE_PMU)
-uint8_t getBatteryPercentage() {
-// #if BATTERY_ADC_PIN != -1
-//     esp_adc_cal_characteristics_t adc_chars;
-//     esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
-//     uint32_t v = esp_adc_cal_raw_to_voltage(analogRead(BATTERY_ADC_PIN), &adc_chars);
-//     float battery_voltage = ((float)v / 1000) * 2;
-//     Serial.print("ADC RAW: ");
-//     Serial.println(v);
-//     Serial.print("Battery voltage: ");
-//     Serial.println(battery_voltage);
-//     if (battery_voltage > 4.2) {
-//         return 100;
-//     } else {
-//         return (uint8_t)(((battery_voltage - 3.0) / (4.2 - 3.0)) * 100);
-//     }
-// #else
+uint8_t getBatteryPercentage()
+{
+    // #if BATTERY_ADC_PIN != -1
+    //     esp_adc_cal_characteristics_t adc_chars;
+    //     esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+    //     uint32_t v = esp_adc_cal_raw_to_voltage(analogRead(BATTERY_ADC_PIN), &adc_chars);
+    //     float battery_voltage = ((float)v / 1000) * 2;
+    //     Serial.print("ADC RAW: ");
+    //     Serial.println(v);
+    //     Serial.print("Battery voltage: ");
+    //     Serial.println(battery_voltage);
+    //     if (battery_voltage > 4.2) {
+    //         return 100;
+    //     } else {
+    //         return (uint8_t)(((battery_voltage - 3.0) / (4.2 - 3.0)) * 100);
+    //     }
+    // #else
     return PMU.isBatteryConnect() ? PMU.getBatteryPercent() : 0;
-// #endif
+    // #endif
 }
 #endif
 
@@ -1133,9 +1358,10 @@ static uint8_t batteryPercentage = 0;
 
 #if defined(ADC_BATTERY)
 #include <esp_adc_cal.h>
-uint8_t getBatteryPercentage() {
+uint8_t getBatteryPercentage()
+{
     esp_adc_cal_characteristics_t adc_chars;
-    // esp_adc_cal_value_t val_type = 
+    // esp_adc_cal_value_t val_type =
     esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
     uint32_t v = esp_adc_cal_raw_to_voltage(analogRead(ADC_BATTERY), &adc_chars);
     v += (v > 0 ? (BATT_OFFSET / 2) : 0);
@@ -1145,30 +1371,52 @@ uint8_t getBatteryPercentage() {
     // Serial.print("Battery voltage: ");
     // Serial.println(battery_voltage);
     batteryVoltage = battery_voltage * 1000;
-    if (battery_voltage > 4.2) {
+    if (battery_voltage > 4.2)
+    {
         return 100;
-    } else if (battery_voltage < 3.0) {
+    }
+    else if (battery_voltage < 3.0)
+    {
         return 0;
-    } else {
+    }
+    else
+    {
         return (uint8_t)(((battery_voltage - 3.0) / (4.2 - 3.0)) * 100);
     }
 }
 #endif
 
-void dbgTick() {
+static uint16_t getTelemetryBatteryMv()
+{
+#if defined(USE_PMU)
+    return PMU.isBatteryConnect() ? (uint16_t)PMU.getBattVoltage() : 0;
+#elif defined(ADC_BATTERY)
+    return batteryVoltage;
+#else
+    return 0;
+#endif
+}
+
+void dbgTick()
+{
 #if defined(ADC_BATTERY)
-    if (config.wifi_mode == WIFI_OFF) {
+    if (config.wifi_mode == WIFI_OFF)
+    {
         batteryPercentage = getBatteryPercentage();
-    } else {
+    }
+    else
+    {
         batteryPercentage = digitalRead(ADC_BATTERY);
     }
 #endif
 #if defined(USE_PMU)
     batteryPercentage = getBatteryPercentage();
-    if (!vbusIn && PMU.isBatteryConnect()) {
+    if (!vbusIn && PMU.isBatteryConnect())
+    {
         static unsigned long lastBatWarnMs = 0;
         static uint8_t lastBatThreshold = 100;
-        if (batteryPercentage < 20 && millis() - lastBatWarnMs >= 120000UL) {
+        if (batteryPercentage < 20 && millis() - lastBatWarnMs >= 120000UL)
+        {
             lastBatWarnMs = millis();
             char cap[] = "Battery";
             char msg[] = "Low!";
@@ -1176,8 +1424,10 @@ void dbgTick() {
             OledPushMsg(cap, msg, empty, 2);
         }
         static const uint8_t thresholds[] = {50, 40, 30, 20, 10};
-        for (uint8_t t : thresholds) {
-            if (batteryPercentage <= t && lastBatThreshold > t) {
+        for (uint8_t t : thresholds)
+        {
+            if (batteryPercentage <= t && lastBatThreshold > t)
+            {
                 lastBatThreshold = t;
                 char cap[] = "Battery";
                 char pctMsg[6];
@@ -1187,7 +1437,8 @@ void dbgTick() {
                 break;
             }
         }
-        if (batteryPercentage > 50) lastBatThreshold = 100;
+        if (batteryPercentage > 50)
+            lastBatThreshold = 100;
     }
 #endif
 
@@ -1201,22 +1452,22 @@ void dbgTick() {
     char strtmp[200];
 #if defined(ADC_BATTERY)
     snprintf(strtmp, sizeof(strtmp),
-        "[DEBUG] {\"t\":\"%02d:%02d:%02d\",\"fix\":%d,\"gps\":%d,\"lat\":%ld,\"lon\":%ld,\"age\":%u,\"dist\":%d,\"bat\":%d,\"bat_mv\":%d}",
-        tmstruct.tm_hour, tmstruct.tm_min, tmstruct.tm_sec,
-        fix ? 1 : 0, GpsPktCnt() > 0 ? 1 : 0,
-        (long)latI, (long)lonI, ageS, distance, batteryPercentage, batteryVoltage);
+             "[DEBUG] {\"t\":\"%02d:%02d:%02d\",\"fix\":%d,\"gps\":%d,\"lat\":%ld,\"lon\":%ld,\"age\":%u,\"dist\":%d,\"bat\":%d,\"bat_mv\":%d}",
+             tmstruct.tm_hour, tmstruct.tm_min, tmstruct.tm_sec,
+             fix ? 1 : 0, GpsPktCnt() > 0 ? 1 : 0,
+             (long)latI, (long)lonI, ageS, distance, batteryPercentage, batteryVoltage);
 #elif defined(USE_PMU)
     snprintf(strtmp, sizeof(strtmp),
-        "[DEBUG] {\"t\":\"%02d:%02d:%02d\",\"fix\":%d,\"gps\":%d,\"lat\":%ld,\"lon\":%ld,\"age\":%u,\"dist\":%d,\"bat\":%d}",
-        tmstruct.tm_hour, tmstruct.tm_min, tmstruct.tm_sec,
-        fix ? 1 : 0, GpsPktCnt() > 0 ? 1 : 0,
-        (long)latI, (long)lonI, ageS, distance, batteryPercentage);
+             "[DEBUG] {\"t\":\"%02d:%02d:%02d\",\"fix\":%d,\"gps\":%d,\"lat\":%ld,\"lon\":%ld,\"age\":%u,\"dist\":%d,\"bat\":%d}",
+             tmstruct.tm_hour, tmstruct.tm_min, tmstruct.tm_sec,
+             fix ? 1 : 0, GpsPktCnt() > 0 ? 1 : 0,
+             (long)latI, (long)lonI, ageS, distance, batteryPercentage);
 #else
     snprintf(strtmp, sizeof(strtmp),
-        "[DEBUG] {\"t\":\"%02d:%02d:%02d\",\"fix\":%d,\"gps\":%d,\"lat\":%ld,\"lon\":%ld,\"age\":%u,\"dist\":%d}",
-        tmstruct.tm_hour, tmstruct.tm_min, tmstruct.tm_sec,
-        fix ? 1 : 0, GpsPktCnt() > 0 ? 1 : 0,
-        (long)latI, (long)lonI, ageS, distance);
+             "[DEBUG] {\"t\":\"%02d:%02d:%02d\",\"fix\":%d,\"gps\":%d,\"lat\":%ld,\"lon\":%ld,\"age\":%u,\"dist\":%d}",
+             tmstruct.tm_hour, tmstruct.tm_min, tmstruct.tm_sec,
+             fix ? 1 : 0, GpsPktCnt() > 0 ? 1 : 0,
+             (long)latI, (long)lonI, ageS, distance);
 #endif
     log_i("%s", strtmp);
 }
@@ -1226,7 +1477,8 @@ bool gpsUnlock = false;
 #if defined(USE_PMU)
 void loopPMU()
 {
-    if (!pmu_flag) {
+    if (!pmu_flag)
+    {
         return;
     }
 
@@ -1235,22 +1487,39 @@ void loopPMU()
     log_i("PMU IRQ => HEX:%x", status);
 
     // --- Power key short: battery status popup ---
-    if (PMU.isPekeyShortPressIrq()) {
+    if (PMU.isPekeyShortPressIrq())
+    {
         log_i("BTN SW3/PWRON SHORT");
-        if (OledIsPopupActive()) {
+        if (OledIsPopupActive())
+        {
             OledDismissPopup();
-        } else {
+        }
+        else
+        {
             uint8_t pct = getBatteryPercentage();
             char batVolt[8], batPct[16];
             snprintf(batVolt, sizeof(batVolt), "%.2fV", PMU.getBattVoltage() / 1000.0f);
             const char *suffix;
-            switch (PMU.getChargerStatus()) {
-                case XPOWERS_AXP2101_CHG_TRI_STATE:  suffix = " TRICKLE"; break;
-                case XPOWERS_AXP2101_CHG_PRE_STATE:  suffix = " PRE-CHG"; break;
-                case XPOWERS_AXP2101_CHG_CC_STATE:   suffix = " CHG CC";  break;
-                case XPOWERS_AXP2101_CHG_CV_STATE:   suffix = " CHG CV";  break;
-                case XPOWERS_AXP2101_CHG_DONE_STATE: suffix = " FULL";    break;
-                default: suffix = vbusIn ? " USB" : "";                   break;
+            switch (PMU.getChargerStatus())
+            {
+            case XPOWERS_AXP2101_CHG_TRI_STATE:
+                suffix = " TRICKLE";
+                break;
+            case XPOWERS_AXP2101_CHG_PRE_STATE:
+                suffix = " PRE-CHG";
+                break;
+            case XPOWERS_AXP2101_CHG_CC_STATE:
+                suffix = " CHG CC";
+                break;
+            case XPOWERS_AXP2101_CHG_CV_STATE:
+                suffix = " CHG CV";
+                break;
+            case XPOWERS_AXP2101_CHG_DONE_STATE:
+                suffix = " FULL";
+                break;
+            default:
+                suffix = vbusIn ? " USB" : "";
+                break;
             }
             snprintf(batPct, sizeof(batPct), "%d%%%s", pct, suffix);
             OledPushMsgBar("Battery", batVolt, batPct, (int8_t)pct, 2);
@@ -1258,49 +1527,57 @@ void loopPMU()
     }
 
     // --- Battery inserted ---
-    if (PMU.isBatInsertIrq()) {
+    if (PMU.isBatInsertIrq())
+    {
         log_i("Battery Inserted");
         OledPushMsgDual("Battery", "Inserted", 2);
-        if (PMU.isCharging()) PMU.setChargingLedMode(XPOWERS_CHG_LED_CTRL_CHG);
+        if (PMU.isCharging())
+            PMU.setChargingLedMode(XPOWERS_CHG_LED_CTRL_CHG);
     }
 
     // --- Charge started ---
-    if (PMU.isBatChagerStartIrq()) {
+    if (PMU.isBatChagerStartIrq())
+    {
         log_i("Charge Start");
         PMU.setChargingLedMode(XPOWERS_CHG_LED_CTRL_CHG);
         OledPushMsgDual("Charge", "Charging", 2);
     }
 
     // --- Charge complete ---
-    if (PMU.isBatChagerDoneIrq()) {
+    if (PMU.isBatChagerDoneIrq())
+    {
         log_i("Charge Done");
-        PMU.setChargingLedMode(XPOWERS_CHG_LED_ON);  // steady = full; BLINK_1HZ was indistinguishable from "no USB"
+        PMU.setChargingLedMode(XPOWERS_CHG_LED_ON); // steady = full; BLINK_1HZ was indistinguishable from "no USB"
         OledPushMsgDual("Charge", "Full!", 2);
     }
 
     // --- Charge safety timer expired (would be silent without this IRQ) ---
-    if (PMU.isChagerOverTimeoutIrq()) {
+    if (PMU.isChagerOverTimeoutIrq())
+    {
         log_w("Charge safety timer expired");
         PMU.setChargingLedMode(XPOWERS_CHG_LED_BLINK_4HZ);
         OledPushMsgDual("Charge", "Timeout!", 3);
     }
 
     // --- Battery removed ---
-    if (PMU.isBatRemoveIrq()) {
+    if (PMU.isBatRemoveIrq())
+    {
         log_i("Battery Removed");
         PMU.setChargingLedMode(XPOWERS_CHG_LED_BLINK_1HZ);
         OledPushMsgDual("Battery", "Removed", 2);
     }
 
     // --- USB connected ---
-    if (PMU.isVbusInsertIrq()) {
+    if (PMU.isVbusInsertIrq())
+    {
         log_i("USB Connected");
         vbusIn = true;
         OledPushMsgDual("USB", "Connected", 1);
     }
 
     // --- USB removed: reset LED since charging stops ---
-    if (PMU.isVbusRemoveIrq()) {
+    if (PMU.isVbusRemoveIrq())
+    {
         log_i("USB Removed");
         vbusIn = false;
         PMU.setChargingLedMode(XPOWERS_CHG_LED_BLINK_1HZ);
@@ -1308,38 +1585,48 @@ void loopPMU()
     }
 
     // --- PMU die overtemperature: charger throttles/stops ---
-    if (PMU.isBatDieOverTemperatureIrq()) {
+    if (PMU.isBatDieOverTemperatureIrq())
+    {
         log_e("PMU die over-temperature");
         PMU.setChargingLedMode(XPOWERS_CHG_LED_BLINK_4HZ);
         OledPushMsgDual("PMU", "Overtemp!", 4);
     }
 
     // --- Charger over-temperature (TS pin; inert with TS disabled, future-proof) ---
-    if (PMU.isBatChargerOverTemperatureIrq()) {
+    if (PMU.isBatChargerOverTemperatureIrq())
+    {
         log_e("Charger over-temperature");
         OledPushMsgDual("Charge", "Overtemp!", 3);
     }
 
     // --- Battery overvoltage (hardware safety event) ---
-    if (PMU.isBatOverVoltageIrq()) {
+    if (PMU.isBatOverVoltageIrq())
+    {
         log_e("Battery overvoltage!");
         OledPushMsgDual("Battery", "Overvolt!", 4);
     }
 
     // --- Hardware low-battery warnings (fuel gauge threshold crossing) ---
-    if (PMU.isDropWarningLevel1Irq()) {
+    if (PMU.isDropWarningLevel1Irq())
+    {
         log_w("Battery low: 15%%");
-        char cap[] = "Battery"; char msg[] = "Low 15%!"; char empty[] = "";
+        char cap[] = "Battery";
+        char msg[] = "Low 15%!";
+        char empty[] = "";
         OledPushMsg(cap, msg, empty, 3);
     }
-    if (PMU.isDropWarningLevel2Irq()) {
+    if (PMU.isDropWarningLevel2Irq())
+    {
         log_e("Battery critical: 5%%");
-        char cap[] = "Battery"; char msg[] = "Critical!"; char empty[] = "";
+        char cap[] = "Battery";
+        char msg[] = "Critical!";
+        char empty[] = "";
         OledPushMsg(cap, msg, empty, 4);
     }
 
     // --- Power key long press: shutdown ---
-    if (PMU.isPekeyLongPressIrq()) {
+    if (PMU.isPekeyLongPressIrq())
+    {
         log_i("Long press — shutdown");
         PMU.shutdown();
     }
@@ -1349,7 +1636,7 @@ void loopPMU()
 #endif
 
 long sendTimer = 0;
-volatile unsigned long lastTxMs = 0;  // millis() of last actual beacon TX; 0 = never
+volatile unsigned long lastTxMs = 0; // millis() of last actual beacon TX; 0 = never
 #ifndef USE_ROTARY
 int btn_count = 0;
 #if defined(BOARD_TTWR_PLUS) || defined(BOARD_TTWR_V1)
@@ -1357,7 +1644,7 @@ const int btnCnt = 500;
 #else
 const int btnCnt = 1000;
 #endif
-#endif  // USE_ROTARY
+#endif // USE_ROTARY
 long timeCheck = 0;
 long TimeSyncPeriod = 0;
 
@@ -1368,26 +1655,33 @@ void loop()
 #else
     vTaskDelay(10 / portTICK_PERIOD_MS);
 #endif
-    if (!fwUpdateProcess) {
-        if (millis() > timeCheck) {
+    if (!fwUpdateProcess)
+    {
+        if (millis() > timeCheck)
+        {
             timeCheck = millis() + 10000;
-            if (ESP.getFreeHeap() < 60000) esp_restart();
+            if (ESP.getFreeHeap() < 60000)
+                esp_restart();
             // Serial.println(String(ESP.getFreeHeap()));
         }
 
-        if (millis() > TimeSyncPeriod) {
+        if (millis() > TimeSyncPeriod)
+        {
             TimeSyncPeriod = millis() + (60 * 60 * 1000); // 60 min
-            if (timeSyncFlag != T_SYNC_NONE && WiFi.status() != WL_CONNECTED) {
+            if (timeSyncFlag != T_SYNC_NONE && WiFi.status() != WL_CONNECTED)
+            {
                 // Reset time sync flag
                 timeSyncFlag = T_SYNC_NONE;
                 log_i("TimeSync Flag Reset");
             }
         }
     } // if (!fwUpdateProcess)
-        
-    if (RotaryProcess()) menuUpdateNeeded = true;
 
-    if (fwUpdateProcess) return;
+    if (RotaryProcess())
+        menuUpdateNeeded = true;
+
+    if (fwUpdateProcess)
+        return;
 
 #ifndef USE_ROTARY
     uint8_t bootPin2 = digitalRead(PIN_ROT_BTN);
@@ -1395,57 +1689,65 @@ void loop()
 
     int rot_sw = digitalRead(BOOT_PIN);
 
-    if (rot_sw == LOW || bootPin2 == LOW) {
+    if (rot_sw == LOW || bootPin2 == LOW)
+    {
         btn_count++;
-        if (btn_count > btnCnt && btn_count < btnCnt * 2)  // Push BOOT 5sec
+        if (btn_count > btnCnt && btn_count < btnCnt * 2) // Push BOOT 5sec
         {
             RX_LED_ON();
             TX_LED_ON();
             String _msg = "WiFi SW";
             OledPushMsg("", (char *)_msg.c_str(), (char *)_empty.c_str(), 15);
         }
-        if (btn_count > btnCnt * 2 && btn_count < btnCnt * 3)  // Push BOOT 10sec
+        if (btn_count > btnCnt * 2 && btn_count < btnCnt * 3) // Push BOOT 10sec
         {
             RX_LED_OFF();
             TX_LED_OFF();
             String _msg = "RF SW";
             OledPushMsg("", (char *)_msg.c_str(), (char *)_empty.c_str(), 15);
         }
-        if (btn_count > btnCnt * 3 && btn_count < btnCnt * 4)  // Push BOOT 15sec
+        if (btn_count > btnCnt * 3 && btn_count < btnCnt * 4) // Push BOOT 15sec
         {
             RX_LED_OFF();
             TX_LED_OFF();
             String _msg = "SB SW";
             OledPushMsg("", (char *)_msg.c_str(), (char *)_empty.c_str(), 15);
         }
-        if (btn_count > btnCnt * 4 && btn_count < btnCnt * 5)  // Push BOOT 20sec
+        if (btn_count > btnCnt * 4 && btn_count < btnCnt * 5) // Push BOOT 20sec
         {
             RX_LED_ON();
             TX_LED_ON();
             String _msg = "Reset";
             OledPushMsg("", (char *)_msg.c_str(), (char *)_empty.c_str(), 15);
         }
-        if (btn_count >= btnCnt * 5)  // Push BOOT 25sec+
+        if (btn_count >= btnCnt * 5) // Push BOOT 25sec+
         {
             RX_LED_OFF();
             TX_LED_OFF();
             String _msg = "Cancel";
             OledPushMsg("", (char *)_msg.c_str(), (char *)_empty.c_str(), 15);
         }
-        if (btn_count > btnCnt * 6) btn_count = btnCnt * 6;  // clamp, don't wrap
-    } else {
-        if (btn_count > 0) {
+        if (btn_count > btnCnt * 6)
+            btn_count = btnCnt * 6; // clamp, don't wrap
+    }
+    else
+    {
+        if (btn_count > 0)
+        {
             // Serial.printf("btn_count=%dms\n", btn_count * 10);
             if (btn_count > btnCnt && btn_count < btnCnt * 2)
             {
-                if (config.wifi_mode == WIFI_OFF) {
+                if (config.wifi_mode == WIFI_OFF)
+                {
                     config.wifi_mode = WIFI_AP_STA_FIX;
                     log_i("WiFi ON");
                     String _msg = "WiFi ON";
                     OledPushMsg("", (char *)_msg.c_str(), (char *)_empty.c_str(), 15);
                     OledUpdate(0, false, false);
                     delay(2000);
-                } else {
+                }
+                else
+                {
                     config.wifi_mode = WIFI_OFF;
                     log_i("WiFi OFF");
                     String _msg = "WiFi OFF";
@@ -1458,20 +1760,26 @@ void loop()
             }
             else if (btn_count > btnCnt * 2 && btn_count < btnCnt * 3)
             {
-                if (config.tnc == true) {
+                if (config.tnc == true)
+                {
                     config.tnc = false;
                     log_i("RF OFF");
                     String _msg = "RF OFF";
                     OledPushMsg("", (char *)_msg.c_str(), (char *)_empty.c_str(), 3);
                     OledUpdate(0, false, false);
                     delay(2000);
-                } else {
+                }
+                else
+                {
                     String _msg = "";
-                    if (callsignValid) {
+                    if (callsignValid)
+                    {
                         log_i("RF ON");
                         _msg = "RF ON";
                         config.tnc = true;
-                    } else {
+                    }
+                    else
+                    {
                         log_w("Invalid callsign!");
                         _msg = "Invalid";
                         config.tnc = false;
@@ -1485,15 +1793,18 @@ void loop()
             else if (btn_count > btnCnt * 3 && btn_count < btnCnt * 4)
             {
                 static int bootBeaconLastFixed = 10;
-                if (config.aprs_beacon == 0) {
+                if (config.aprs_beacon == 0)
+                {
                     config.aprs_beacon = bootBeaconLastFixed > 0 ? bootBeaconLastFixed : 10;
-                } else {
+                }
+                else
+                {
                     bootBeaconLastFixed = config.aprs_beacon;
                     config.aprs_beacon = 0;
                 }
                 SaveConfig();
                 sendTimer = millis();
-                char msgSB[]  = "SB ON";
+                char msgSB[] = "SB ON";
                 char msgFix[] = "SB OFF";
                 OledPushMsg("", config.aprs_beacon == 0 ? msgSB : msgFix, (char *)_empty.c_str(), 3);
                 OledUpdate(0, false, false);
@@ -1517,11 +1828,13 @@ void loop()
                 OledUpdate(0, false, false);
                 // delay(2000);
             }
-            else if (btn_count > 10)  // Push BOOT >100mS to PTT Fix location
+            else if (btn_count > 10) // Push BOOT >100mS to PTT Fix location
             {
-                if (callsignValid && config.tnc) {
+                if (callsignValid && config.tnc)
+                {
                     String tnc2Raw = send_gps_location();
-                    if (tnc2Raw.length() > 0) {
+                    if (tnc2Raw.length() > 0)
+                    {
                         pkgTxPush(tnc2Raw.c_str(), tnc2Raw.length(), 0);
                         // APRS_sendTNC2Pkt(tnc2Raw); // Send packet to RF
                         log_i("Manual TX: %s", tnc2Raw.c_str());
@@ -1531,7 +1844,7 @@ void loop()
             btn_count = 0;
         }
     }
-#endif  // USE_ROTARY
+#endif // USE_ROTARY
 
 #if defined(BOARD_TTWR_PLUS)
     {
@@ -1540,43 +1853,65 @@ void loop()
         bool sw4 = digitalRead(USER_BUTTON);
         bool sw1 = digitalRead(BOOT_PIN);
 
-        if (sw4 == LOW && sw4Prev == HIGH) sw4Ms = millis();
-        if (sw4 == LOW && sw4Ms && (millis() - sw4Ms >= 2000)) {
+        if (sw4 == LOW && sw4Prev == HIGH)
+            sw4Ms = millis();
+        if (sw4 == LOW && sw4Ms && (millis() - sw4Ms >= 2000))
+        {
             log_i("[BTN] {\"btn\":\"SW4\",\"type\":\"long\",\"action\":\"rf_toggle\"}");
             sw4Ms = 0;
             config.tnc = !config.tnc;
             SaveConfig();
-            char msgOn[] = "RF ON";  char msgOff[] = "RF OFF";  char empty[] = "";
+            char msgOn[] = "RF ON";
+            char msgOff[] = "RF OFF";
+            char empty[] = "";
             OledPushMsg("", config.tnc ? msgOn : msgOff, empty, 3);
         }
-        if (sw4 == HIGH && sw4Prev == LOW && sw4Ms) {
-            uint32_t held = millis() - sw4Ms;  sw4Ms = 0;
-            if (held >= 50) {
+        if (sw4 == HIGH && sw4Prev == LOW && sw4Ms)
+        {
+            uint32_t held = millis() - sw4Ms;
+            sw4Ms = 0;
+            if (held >= 50)
+            {
                 log_i("[BTN] {\"btn\":\"SW4\",\"type\":\"short\",\"held_ms\":%u,\"action\":\"beacon\"}", held);
-                if (OledIsPopupActive()) {
+                if (OledIsPopupActive())
+                {
                     OledDismissPopup();
-                } else {
+                }
+                else
+                {
                     char empty[] = "";
-                    if (!config.tnc) {
-                        char msg[] = "RF IS OFF";  OledPushMsg("", msg, empty, 3);
-                    } else if (config.gps_mode == GPS_MODE_GPS && !gps.location.isValid()) {
-                        char msg[] = "NO GPS FIX";  OledPushMsg("", msg, empty, 3);
-                    } else if (lastTxMs > 0 && millis() - lastTxMs < 30000UL) {
+                    if (!config.tnc)
+                    {
+                        char msg[] = "RF IS OFF";
+                        OledPushMsg("", msg, empty, 3);
+                    }
+                    else if (config.gps_mode == GPS_MODE_GPS && !gps.location.isValid())
+                    {
+                        char msg[] = "NO GPS FIX";
+                        OledPushMsg("", msg, empty, 3);
+                    }
+                    else if (lastTxMs > 0 && millis() - lastTxMs < 30000UL)
+                    {
                         char waitMsg[16], tooFast[] = "Too fast!";
                         snprintf(waitMsg, sizeof(waitMsg), "Wait %ds!", (int)((30000UL - (millis() - lastTxMs) + 999) / 1000));
                         OledPushMsg("", tooFast, waitMsg, 3);
-                    } else {
-                        menuMode = MENU_HIDDEN;  // must precede flag: OledPushMsg I2C takes ~25ms during which taskAPRS reads the flag
+                    }
+                    else
+                    {
+                        menuMode = MENU_HIDDEN; // must precede flag: OledPushMsg I2C takes ~25ms during which taskAPRS reads the flag
                         send_aprs_update = true;
-                        char msg[] = "Beacon TX";  OledPushMsg("", msg, empty, 1);
+                        char msg[] = "Beacon TX";
+                        OledPushMsg("", msg, empty, 1);
                     }
                 }
             }
         }
         sw4Prev = sw4;
 
-        if (sw1 == LOW && sw1Prev == HIGH) sw1Ms = millis();
-        if (sw1 == LOW && sw1Ms && (millis() - sw1Ms >= 2000)) {
+        if (sw1 == LOW && sw1Prev == HIGH)
+            sw1Ms = millis();
+        if (sw1 == LOW && sw1Ms && (millis() - sw1Ms >= 2000))
+        {
             log_i("[BTN] {\"btn\":\"SW1\",\"type\":\"long\",\"action\":\"rf_power_toggle\"}");
             sw1Ms = 0;
             config.rf_power = !config.rf_power;
@@ -1584,16 +1919,24 @@ void loop()
 #ifdef POWER_PIN
             digitalWrite(POWER_PIN, config.rf_power);
 #endif
-            char msgHi[] = "RF High";  char msgLo[] = "RF Low";  char empty[] = "";
+            char msgHi[] = "RF High";
+            char msgLo[] = "RF Low";
+            char empty[] = "";
             OledPushMsg("", config.rf_power ? msgHi : msgLo, empty, 3);
         }
-        if (sw1 == HIGH && sw1Prev == LOW && sw1Ms) {
-            uint32_t held = millis() - sw1Ms;  sw1Ms = 0;
-            if (held >= 50) {
+        if (sw1 == HIGH && sw1Prev == LOW && sw1Ms)
+        {
+            uint32_t held = millis() - sw1Ms;
+            sw1Ms = 0;
+            if (held >= 50)
+            {
                 log_i("[BTN] {\"btn\":\"SW1\",\"type\":\"short\",\"held_ms\":%u,\"action\":\"display_toggle\"}", held);
-                if (OledIsPopupActive()) {
+                if (OledIsPopupActive())
+                {
                     OledDismissPopup();
-                } else {
+                }
+                else
+                {
                     OledResetActivity();
                     OledTogglePower();
                 }
@@ -1604,14 +1947,15 @@ void loop()
 #endif
 
 #if defined(BOARD_ESP32DR)
-    if (AFSKInitAct == true) {
+    if (AFSKInitAct == true)
+    {
         AFSK_Poll(true);
     }
 #endif
 }
 
-
-void sendIsPkg(char *raw) {
+void sendIsPkg(char *raw)
+{
     char str[300];
     sprintf(str, "%s-%d>%s%s:%s", config.aprs_mycall, config.aprs_ssid, APRS_TOCALL, VERSION, raw);
     // client.println(str);
@@ -1622,7 +1966,8 @@ void sendIsPkg(char *raw) {
         pkgTxPush(str, strlen(str), 0);
 }
 
-void sendIsPkgMsg(char *raw) {
+void sendIsPkgMsg(char *raw)
+{
     char str[300];
     char call[11];
     int i;
@@ -1645,13 +1990,14 @@ void sendIsPkgMsg(char *raw) {
         aprsClient.println(tnc2Raw); // Send packet to Inet
     if (callsignValid && config.tnc && config.tnc_digi)
         pkgTxPush(str, strlen(str), 0);
-    
+
     // APRS_sendTNC2Pkt(tnc2Raw); // Send packet to RF
 }
 
 long timeSlot;
 
-void taskAPRS(void *pvParameters) {
+void taskAPRS(void *pvParameters)
+{
     //	long start, stop;
     // char *raw;
     // char *str;
@@ -1665,30 +2011,38 @@ void taskAPRS(void *pvParameters) {
     APRS_setTail(APRS_TAIL);
 
     sendTimer = millis() - (config.aprs_beacon * 60 * 1000) + 30000;
-    igateTLM.TeleTimeout = millis() + 60000;  // 1Min
+    igateTLM.TeleTimeout = millis() + 60000; // 1Min
     AFSKInitAct = true;
     timeSlot = millis();
-    
-    for (;;) {
+
+    for (;;)
+    {
         long now = millis();
         // wdtSensorTimer = now;
         time_t timeStamp;
         time(&timeStamp);
         vTaskDelay(10 / portTICK_PERIOD_MS);
         // serviceHandle();
-        
-        if (now > (timeSlot + 10)) {
+
+        if (now > (timeSlot + 10))
+        {
             // Transmit in timeslot if enabled
-            if (SQL_PIN > -1) { // Set SQL pin
-                if (!digitalRead(SQL_PIN)) { // RX State Fail
+            if (SQL_PIN > -1)
+            { // Set SQL pin
+                if (!digitalRead(SQL_PIN))
+                { // RX State Fail
                     if (pkgTxSend())
                         timeSlot = millis() + config.tx_timeslot; // Tx Time Slot >2sec.
                     else
                         timeSlot = millis() + 3000;
-                } else {
+                }
+                else
+                {
                     timeSlot = millis() + 1500;
                 }
-            } else {
+            }
+            else
+            {
                 if (pkgTxSend())
                     timeSlot = millis() + config.tx_timeslot; // Tx Time Slot > 2sec.
                 else
@@ -1697,37 +2051,47 @@ void taskAPRS(void *pvParameters) {
         }
 
         bool sendByTime = false;
-        if (config.aprs_beacon > 0) {   // it interval configured
+        if (config.aprs_beacon > 0)
+        { // it interval configured
             sendByTime = (now > (sendTimer + (config.aprs_beacon * 60 * 1000)));
         }
         bool sendByFlag = send_aprs_update;
 
         send_aprs_update = false;
 
-        if ((sendByTime || sendByFlag) && menuMode == MENU_HIDDEN) {
+        if ((sendByTime || sendByFlag) && menuMode == MENU_HIDDEN)
+        {
             sendTimer = now;
-            lastTxMs  = now;
+            lastTxMs = now;
 
-            if (sendByTime) log_i("[TX] {\"event\":\"send\",\"trigger\":\"time\"}");
-            if (sendByFlag) log_i("[TX] {\"event\":\"send\",\"trigger\":\"flag\"}");
+            if (sendByTime)
+                log_i("[TX] {\"event\":\"send\",\"trigger\":\"time\"}");
+            if (sendByFlag)
+                log_i("[TX] {\"event\":\"send\",\"trigger\":\"flag\"}");
 
-            if (digiCount > 0) digiCount--;
+            if (digiCount > 0)
+                digiCount--;
 
             RF_Check();
 
-            if (AFSKInitAct == true) {
-                if (callsignValid && config.tnc) {
+            if (AFSKInitAct == true)
+            {
+                if (callsignValid && config.tnc)
+                {
                     String rawData = send_gps_location();
-                    if (rawData.length() > 0) {
-                        if (aprsClient.connected()) {
-                            aprsClient.println(rawData);  // Send packet to Inet
+
+                    if (rawData.length() > 0)
+                    {
+                        if (aprsClient.connected())
+                        {
+                            aprsClient.println(rawData); // Send packet to Inet
                         }
-                        
-                        // char *rawP = (char *)malloc(rawData.length());
-                        // memcpy(rawP, rawData.c_str(), rawData.length());
-                        // // rawData.toCharArray(rawP, rawData.length());
-                        // pkgTxPush(rawP, rawData.length(), 0);
-                        // free(rawP);
+
+                        //  char *rawP = (char *)malloc(rawData.length());
+                        //  memcpy(rawP, rawData.c_str(), rawData.length());
+                        //  // rawData.toCharArray(rawP, rawData.length());
+                        //  pkgTxPush(rawP, rawData.length(), 0);
+                        //  free(rawP);
 
                         pkgTxPush(rawData.c_str(), rawData.length(), 0);
                     }
@@ -1735,38 +2099,48 @@ void taskAPRS(void *pvParameters) {
             }
         }
 
-        if (callsignValid && config.tnc_telemetry) {
-            if (igateTLM.TeleTimeout < millis()) {
+        if (callsignValid && config.tnc_telemetry)
+        {
+            if (igateTLM.TeleTimeout < millis())
+            {
                 igateTLM.TeleTimeout =
-                    millis() + TNC_TELEMETRY_PERIOD;  // 10Min
-                if ((igateTLM.Sequence % 6) == 0) {
+                    millis() + TNC_TELEMETRY_PERIOD; // 10Min
+                if ((igateTLM.Sequence % 6) == 0)
+                {
                     sendIsPkgMsg((char *)&PARM[0]);
                     sendIsPkgMsg((char *)&UNIT[0]);
                     sendIsPkgMsg((char *)&EQNS[0]);
                 }
                 char rawTlm[100];
-                if (config.aprs_ssid == 0) {
-                    sprintf(rawTlm, "%s>%s:T#%03d,%d,%d,%d,%d,%d,00000000",
+                const uint16_t tlmBatteryMv = getTelemetryBatteryMv();
+                if (config.aprs_ssid == 0)
+                {
+                    sprintf(rawTlm, "%s>%s:T#%03d,%d,%d,%d,%d,%u,00000000",
                             config.aprs_mycall, APRS_TOCALL, igateTLM.Sequence,
                             igateTLM.RF2INET, igateTLM.INET2RF, igateTLM.RX,
-                            igateTLM.TX, igateTLM.DROP);
-                } else {
+                            igateTLM.TX, tlmBatteryMv);
+                }
+                else
+                {
                     sprintf(
-                        rawTlm, "%s-%d>%s:T#%03d,%d,%d,%d,%d,%d,00000000",
+                        rawTlm, "%s-%d>%s:T#%03d,%d,%d,%d,%d,%u,00000000",
                         config.aprs_mycall, config.aprs_ssid, APRS_TOCALL, igateTLM.Sequence,
                         igateTLM.RF2INET, igateTLM.INET2RF, igateTLM.RX,
-                        igateTLM.TX, igateTLM.DROP);
+                        igateTLM.TX, tlmBatteryMv);
                 }
 
-                if (callsignValid && aprsClient.connected()) {
-                    aprsClient.println(String(rawTlm));  // Send packet to Inet
+                if (callsignValid && aprsClient.connected())
+                {
+                    aprsClient.println(String(rawTlm)); // Send packet to Inet
                 }
-                if (callsignValid && config.tnc && config.tnc_digi) {
+                if (callsignValid && config.tnc && config.tnc_digi)
+                {
                     pkgTxPush(rawTlm, strlen(rawTlm), 0);
                 }
                 // APRS_sendTNC2Pkt(String(rawTlm)); // Send packet to RF
                 igateTLM.Sequence++;
-                if (igateTLM.Sequence > 999) igateTLM.Sequence = 0;
+                if (igateTLM.Sequence > 999)
+                    igateTLM.Sequence = 0;
                 igateTLM.DROP = 0;
                 igateTLM.INET2RF = 0;
                 igateTLM.RF2INET = 0;
@@ -1777,8 +2151,10 @@ void taskAPRS(void *pvParameters) {
         }
 
         // IGate RF->INET
-        if (callsignValid && config.tnc) {
-            if (PacketBuffer.getCount() > 0) {
+        if (callsignValid && config.tnc)
+        {
+            if (PacketBuffer.getCount() > 0)
+            {
                 String tnc2;
                 PacketBuffer.pop(&incomingPacket);
                 // igateProcess(incomingPacket);
@@ -1788,41 +2164,48 @@ void taskAPRS(void *pvParameters) {
 
                 // store to log
                 char call[11];
-                if (incomingPacket.src.ssid > 0) {
+                if (incomingPacket.src.ssid > 0)
+                {
                     sprintf(call, "%s-%d", incomingPacket.src.call, incomingPacket.src.ssid);
-                } else {
+                }
+                else
+                {
                     sprintf(call, "%s", incomingPacket.src.call);
                 }
 
                 log_d("Call: %s", call);
-                
+
                 uint8_t type = pkgType((char *)incomingPacket.info);
-                
+
                 // char *rawP = (char *)malloc(tnc2.length());
                 // memcpy(rawP, tnc2.c_str(), tnc2.length());
                 // pkgListUpdate(call, rawP, type, 0);
                 // free(rawP);
                 pkgListUpdate(call, (char *)tnc2.c_str(), type, 0);
                 strlcpy(lastRxCall, call, sizeof(lastRxCall));
-                lastRxTime  = time(nullptr);
-                lastRxIsIS  = false;
+                lastRxTime = time(nullptr);
+                lastRxIsIS = false;
 
-                bool isSmsForUs = (type & FILTER_MESSAGE) && config.aprs_sms_rx
-                                  && aprsCheckMsg(call, (const char *)incomingPacket.info);
+                bool isSmsForUs = (type & FILTER_MESSAGE) && config.aprs_sms_rx && aprsCheckMsg(call, (const char *)incomingPacket.info);
                 bool msgForUs = isSmsForUs && config.aprs_sms_popup > 0;
 
-                if (!msgForUs && config.aprs_rx_popup > 0) {
+                if (!msgForUs && config.aprs_rx_popup > 0)
+                {
                     String msgType = "Type: " + pkgGetType(type);
                     OledPushMsg("RF RX", call, (char *)msgType.c_str(), config.aprs_rx_popup);
                 }
 
                 // IGate Process
-                if (config.rf2inet && aprsClient.connected()) {
+                if (config.rf2inet && aprsClient.connected())
+                {
                     int ret = igateProcess(incomingPacket);
-                    if (ret == 0) {
+                    if (ret == 0)
+                    {
                         status.dropCount++;
                         igateTLM.DROP++;
-                    } else {
+                    }
+                    else
+                    {
                         status.rf2inet++;
                         igateTLM.RF2INET++;
                         // igateTLM.TX++;
@@ -1833,16 +2216,22 @@ void taskAPRS(void *pvParameters) {
                 }
 
                 // Digi Repeater Process
-                if (callsignValid && config.tnc_digi) {
+                if (callsignValid && config.tnc_digi)
+                {
                     int dlyFlag = digiProcess(incomingPacket);
-                    if (dlyFlag > 0) {
+                    if (dlyFlag > 0)
+                    {
                         int digiDelay;
                         status.digiCount++;
                         igateTLM.RX++;
-                        if (dlyFlag == 1) {
+                        if (dlyFlag == 1)
+                        {
                             digiDelay = 0;
-                        } else {
-                            if (config.digi_delay == 0) {  // Auto mode
+                        }
+                        else
+                        {
+                            if (config.digi_delay == 0)
+                            { // Auto mode
                                 if (digiCount > 20)
                                     digiDelay = random(10, 5000);
                                 else if (digiCount > 10)
@@ -1851,7 +2240,9 @@ void taskAPRS(void *pvParameters) {
                                     digiDelay = random(10, 1500);
                                 else
                                     digiDelay = random(10, 500);
-                            } else {
+                            }
+                            else
+                            {
                                 digiDelay = random(10, config.digi_delay > 10 ? config.digi_delay : 20);
                             }
                         }
@@ -1881,25 +2272,29 @@ long wifiTTL = 0;
 // WiFi connect timeout per AP. Increase when connecting takes longer.
 const uint32_t connectTimeoutMs = 10000;
 
-//bool wifiConnected = false;
+// bool wifiConnected = false;
 
-void Wifi_connected(WiFiEvent_t event, WiFiEventInfo_t info){
-  log_d("Successfully connected to Access Point");
+void Wifi_connected(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+    log_d("Successfully connected to Access Point");
 }
 
-void Get_IPAddress(WiFiEvent_t event, WiFiEventInfo_t info){
-  log_d("WIFI is connected!");
-  log_d("IP address: %s",WiFi.localIP().toString().c_str());
+void Get_IPAddress(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+    log_d("WIFI is connected!");
+    log_d("IP address: %s", WiFi.localIP().toString().c_str());
 }
 
-void Wifi_disconnected(WiFiEvent_t event, WiFiEventInfo_t info){
-  log_d("Disconnected from WIFI access point");
-//   log_d("WiFi lost connection. Reason: ");
-//   log_d("%s\n",info.wifi_sta_disconnected.reason);
-  log_d("Reconnecting...");
+void Wifi_disconnected(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+    log_d("Disconnected from WIFI access point");
+    //   log_d("WiFi lost connection. Reason: ");
+    //   log_d("%s\n",info.wifi_sta_disconnected.reason);
+    log_d("Reconnecting...");
 }
 
-void taskNetwork(void *pvParameters) {
+void taskNetwork(void *pvParameters)
+{
     log_i("Task <Network> started");
 
     WiFi.onEvent(Wifi_connected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
@@ -1957,11 +2352,13 @@ void taskNetwork(void *pvParameters) {
     //     NTP_Timeout = millis() + 2000;
     // }
 
-    if (config.wifi_mode & WIFI_STA_FIX) {
+    if (config.wifi_mode & WIFI_STA_FIX)
+    {
         WiFi.begin(config.wifi_ssid, config.wifi_pass);
-        WiFi.setAutoReconnect(false);  // after begin() — begin() resets this to true internally
+        WiFi.setAutoReconnect(false); // after begin() — begin() resets this to true internally
         wifiTTL = millis() + connectTimeoutMs;
-        if (!(config.wifi_mode & WIFI_AP_FIX)) {  // skip if webService() already called in AP block
+        if (!(config.wifi_mode & WIFI_AP_FIX))
+        { // skip if webService() already called in AP block
             webService();
         }
         NTP_Timeout = millis() + 2000;
@@ -1969,18 +2366,22 @@ void taskNetwork(void *pvParameters) {
 
     configTime(3600 * config.timeZone, 0, config.ntpServer);
 
-    for (;;) {
+    for (;;)
+    {
         vTaskDelay(10 / portTICK_PERIOD_MS);
 
-        if (config.wifi_mode != WIFI_OFF_FIX) {
+        if (config.wifi_mode != WIFI_OFF_FIX)
+        {
             serviceHandle();
         }
 
-        if (WiFi.status() == WL_CONNECTED) 
+        if (WiFi.status() == WL_CONNECTED)
         {
-            if (millis() > NTP_Timeout) {                    
+            if (millis() > NTP_Timeout)
+            {
                 NTP_Timeout = millis() + 86400000;
-                if (config.synctime) {
+                if (config.synctime)
+                {
                     // Serial.println("Config NTP");
                     // setSyncProvider(getNtpTime);
                     log_i("Contacting NTP server");
@@ -1989,7 +2390,8 @@ void taskNetwork(void *pvParameters) {
                     time_t systemTime;
                     time(&systemTime);
                     setTime(systemTime);
-                    if (systemUptime == 0) {
+                    if (systemUptime == 0)
+                    {
                         systemUptime = time(NULL);
                     }
 
@@ -1997,30 +2399,38 @@ void taskNetwork(void *pvParameters) {
                 }
             }
 
-            if (config.aprs) {
-                if (aprsClient.connected() == false) {
+            if (config.aprs)
+            {
+                if (aprsClient.connected() == false)
+                {
                     APRSConnect();
-                } else {
-                    if (aprsClient.available()) {
-                        String line = aprsClient.readStringUntil('\n');  //read the value at Server answer sleep line by line
+                }
+                else
+                {
+                    if (aprsClient.available())
+                    {
+                        String line = aprsClient.readStringUntil('\n'); // read the value at Server answer sleep line by line
                         log_i("APRS-IS: %s", line.c_str());
                         status.isCount++;
 
-                        int start_val = line.indexOf(">", 0);  // find the first position of >
-                        if (start_val > 3) {
+                        int start_val = line.indexOf(">", 0); // find the first position of >
+                        if (start_val > 3)
+                        {
                             // raw = (char *)malloc(line.length() + 1);
                             String src_call = line.substring(0, start_val);
-                            int msg_call_idx = line.indexOf("::");  // text only
+                            int msg_call_idx = line.indexOf("::"); // text only
                             String msg_call = "";
-                            if (msg_call_idx > 0) {
+                            if (msg_call_idx > 0)
+                            {
                                 msg_call = line.substring(msg_call_idx + 2, msg_call_idx + 9);
                             }
 
                             log_i("SRC_CALL: %s", src_call.c_str());
-                            if (msg_call_idx > 0) {
+                            if (msg_call_idx > 0)
+                            {
                                 log_i("MSG_CALL: %s", msg_call.c_str());
                             }
-                            
+
                             char raw[500];
                             memset(&raw[0], 0, sizeof(raw));
                             start_val = line.indexOf(":", 10); // Search of info in ax25
@@ -2036,11 +2446,11 @@ void taskNetwork(void *pvParameters) {
                                 lastRxTime = time(nullptr);
                                 lastRxIsIS = true;
 
-                                bool isSmsForUs2 = (type & FILTER_MESSAGE) && config.aprs_sms_rx
-                                                   && aprsCheckMsg(src_call.c_str(), &raw[0]);
+                                bool isSmsForUs2 = (type & FILTER_MESSAGE) && config.aprs_sms_rx && aprsCheckMsg(src_call.c_str(), &raw[0]);
                                 bool msgForUs2 = isSmsForUs2 && config.aprs_sms_popup > 0;
 
-                                if (!msgForUs2 && config.aprs_rx_popup > 0) {
+                                if (!msgForUs2 && config.aprs_rx_popup > 0)
+                                {
                                     String msgType = "Type: " + pkgGetType(type);
                                     OledPushMsg("APRS-IS RX", (char *)src_call.c_str(), (char *)msgType.c_str(), config.aprs_rx_popup);
                                 }
@@ -2050,28 +2460,32 @@ void taskNetwork(void *pvParameters) {
                             // igateTLM.RX++;
 
                             // Is it not Telemetry?
-                            if (line.indexOf(":T#") < 0
-                                && line.indexOf("PARM.") < 0
-                                && line.indexOf("UNIT.") < 0
-                                && line.indexOf("EQNS.") < 0
-                                && line.indexOf("BITS.") < 0)
+                            if (line.indexOf(":T#") < 0 && line.indexOf("PARM.") < 0 && line.indexOf("UNIT.") < 0 && line.indexOf("EQNS.") < 0 && line.indexOf("BITS.") < 0)
                             {
                                 // Is INET2RF configured and MSG_CALL present
-                                if (callsignValid && config.tnc && config.inet2rf && (msg_call != "")) {
+                                if (callsignValid && config.tnc && config.inet2rf && (msg_call != ""))
+                                {
                                     // Is adresse is in owner callsigns group?
-                                    if (msg_call.startsWith(config.aprs_mycall)) {
+                                    if (msg_call.startsWith(config.aprs_mycall))
+                                    {
                                         log_i("MSG to Owner group");
                                         pkgTxPush(line.c_str(), line.length(), 0);
                                         status.inet2rf++;
                                         igateTLM.INET2RF++;
                                         log_i("[PKT] {\"dir\":\"inet2rf\",\"pkt\":\"%s\"}", line.c_str());
-                                    } else {
+                                    }
+                                    else
+                                    {
                                         bool msgForwarded = false;
                                         // Is it a message for last heard stations?
-                                        for (int i = 0; i < PKGLISTSIZE; i++) {
-                                            if (pkgList[i].time > 0) {
-                                                if (strcmp(pkgList[i].calsign, msg_call.c_str()) == 0) {
-                                                    if (pkgList[i].channel == 0) {  // was heard on RF
+                                        for (int i = 0; i < PKGLISTSIZE; i++)
+                                        {
+                                            if (pkgList[i].time > 0)
+                                            {
+                                                if (strcmp(pkgList[i].calsign, msg_call.c_str()) == 0)
+                                                {
+                                                    if (pkgList[i].channel == 0)
+                                                    { // was heard on RF
                                                         log_i("[PKT] {\"dir\":\"inet2rf\",\"reason\":\"last_heard\"}");
                                                         pkgTxPush(line.c_str(), line.length(), 0);
                                                         status.inet2rf++;
@@ -2084,18 +2498,23 @@ void taskNetwork(void *pvParameters) {
                                             }
                                         }
 
-                                        if (!msgForwarded) {
+                                        if (!msgForwarded)
+                                        {
                                             // Not found in last heard list
                                             status.dropCount++;
                                             log_i("[PKT] {\"dir\":\"drop\",\"reason\":\"not_last_heard\"}");
                                         }
                                     }
-                                } else {
+                                }
+                                else
+                                {
                                     // No INET2RF configured or MSG_CALL not present
                                     status.dropCount++;
                                     log_i("[PKT] {\"dir\":\"drop\",\"reason\":\"no_inet2rf\",\"from\":\"%s\"}", src_call.c_str());
                                 }
-                            } else {
+                            }
+                            else
+                            {
                                 // Telemetry found
                                 igateTLM.DROP++;
                                 status.dropCount++;
@@ -2107,8 +2526,10 @@ void taskNetwork(void *pvParameters) {
             }
         }
 
-        if ((config.wifi_mode & WIFI_STA_FIX) && WiFi.status() != WL_CONNECTED) {
-            if (millis() > wifiTTL) {
+        if ((config.wifi_mode & WIFI_STA_FIX) && WiFi.status() != WL_CONNECTED)
+        {
+            if (millis() > wifiTTL)
+            {
                 wifiTTL = millis() + 30000;
                 WiFi.reconnect();
                 log_d("WiFi STA reconnect attempt");
@@ -2117,61 +2538,74 @@ void taskNetwork(void *pvParameters) {
     }
 }
 
-void taskOLEDDisplay(void *pvParameters) {
+void taskOLEDDisplay(void *pvParameters)
+{
     log_i("Task <OLEDDisplay> started");
     unsigned long lastFullUpdate = 0;
 
-    for (;;) {
+    for (;;)
+    {
         vTaskDelay(50 / portTICK_PERIOD_MS);
 
-        if (fwUpdateProcess) {
+        if (fwUpdateProcess)
+        {
             dbgTick();
             OledUpdateFWU();
             continue;
         }
 
-        bool fullCycle   = (millis() - lastFullUpdate >= 1000);
-        bool doOled      = menuUpdateNeeded || fullCycle;
-        static uint32_t lastStatusLog  = 0;
-        static bool     cfgBackupDone  = false;
+        bool fullCycle = (millis() - lastFullUpdate >= 1000);
+        bool doOled = menuUpdateNeeded || fullCycle;
+        static uint32_t lastStatusLog = 0;
+        static bool cfgBackupDone = false;
 
-        if (fullCycle) {
+        if (fullCycle)
+        {
             lastFullUpdate = millis();
             dbgTick();
-            if (millis() - lastStatusLog >= 10000) {
+            if (millis() - lastStatusLog >= 10000)
+            {
                 lastStatusLog = millis();
                 SerialStatusLog();
             }
-            if (!cfgBackupDone && millis() >= 5UL * 60UL * 1000UL) {
+            if (!cfgBackupDone && millis() >= 5UL * 60UL * 1000UL)
+            {
                 SaveConfigBackup();
                 cfgBackupDone = true;
             }
         }
 
-
-        if (doOled && !oledTxBusy) {
+        if (doOled && !oledTxBusy)
+        {
             menuUpdateNeeded = false;
 #if defined(ADC_BATTERY)
             OledUpdate(batteryPercentage, false, AFSKInitAct);
-            if (fullCycle) WebDataUpdate(batteryVoltage, false);
+            if (fullCycle)
+                WebDataUpdate(batteryVoltage, false);
 #elif defined(USE_PMU)
             OledUpdate(batteryPercentage, vbusIn, AFSKInitAct, PMU.isCharging());
-            if (fullCycle) WebDataUpdate(batteryPercentage, vbusIn);
+            if (fullCycle)
+                WebDataUpdate(batteryPercentage, vbusIn);
 #else
             OledUpdate(-1, false, AFSKInitAct);
-            if (fullCycle) WebDataUpdate(-1, false);
+            if (fullCycle)
+                WebDataUpdate(-1, false);
 #endif
         }
 
-        if (fullCycle && (menuMode == MENU_RX_LIST || menuMode == MENU_RX_DETAIL)) {
+        if (fullCycle && (menuMode == MENU_RX_LIST || menuMode == MENU_RX_DETAIL))
+        {
             sort(pkgList, PKGLISTSIZE);
             rxListCount = pkgListValidCount();
         }
 
-        if (fullCycle) {
-            if (!oledTxBusy) OledCheckAutoDim();
+        if (fullCycle)
+        {
+            if (!oledTxBusy)
+                OledCheckAutoDim();
 #if defined(USE_PMU)
-            if (!oledTxBusy) loopPMU();
+            if (!oledTxBusy)
+                loopPMU();
 #endif
 #if defined(USE_NEOPIXEL)
             strip.show();
@@ -2180,14 +2614,20 @@ void taskOLEDDisplay(void *pvParameters) {
     }
 }
 
-void updateGps(void) {
-    if (fwUpdateProcess) return;
+void updateGps(void)
+{
+    if (fwUpdateProcess)
+        return;
 
     // If startup dealy not expired
-    if (!gpsUnlock) {
-        if (millis() < gpsUpdTMO) {
+    if (!gpsUnlock)
+    {
+        if (millis() < gpsUpdTMO)
+        {
             return;
-        } else {
+        }
+        else
+        {
             log_i("GPS Unlocked");
             gpsUnlock = true;
         }
@@ -2196,16 +2636,19 @@ void updateGps(void) {
     GpsUpdate();
 
     // 1/sec
-    if (millis() - gpsUpdTMO > 1000) {
+    if (millis() - gpsUpdTMO > 1000)
+    {
         distanceChanged();
         gpsUpdTMO = millis();
     }
 }
 
-void taskGPS(void *pvParameters) {
+void taskGPS(void *pvParameters)
+{
     log_i("Task <GPS> started");
 
-    for (;;) {
+    for (;;)
+    {
         vTaskDelay(100 / portTICK_PERIOD_MS);
 
 #ifdef USE_GPS
@@ -2220,13 +2663,17 @@ void taskGPS(void *pvParameters) {
 }
 
 #if !defined(BOARD_ESP32DR)
-void taskTNC(void *pvParameters) {
+void taskTNC(void *pvParameters)
+{
     log_i("Task <TNC> started");
 
-    for (;;) {
-        if (!fwUpdateProcess) {
-            if (AFSKInitAct == true) {
-               AFSK_Poll(true);
+    for (;;)
+    {
+        if (!fwUpdateProcess)
+        {
+            if (AFSKInitAct == true)
+            {
+                AFSK_Poll(true);
             }
         }
 #if defined(BOARD_ESP32DR)
